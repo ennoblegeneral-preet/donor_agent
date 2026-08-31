@@ -116,7 +116,7 @@ MAX_ZOHO_BULK = 50
 # N companies fires N companies' worth of concurrent Tavily searches at once,
 # which blows through Tavily's rate limit even with the per-call semaphore in
 # search_tool.py (that one only caps instantaneous concurrency, not sustained rate).
-_pipeline_concurrency = threading.Semaphore(10)
+_pipeline_concurrency = threading.Semaphore(6)
 
 
 def set_pipeline_progress(company_id, stage, message, state="running", percent=0):
@@ -392,12 +392,12 @@ def research_financial():
 
 @app.route("/research-bulk", methods=["POST"])
 @login_required
-@limiter.limit("2 per minute")
+@limiter.limit("15 per minute; 60 per hour")
 def add_companies_bulk():
     upload = request.files.get("csv_file")
     username = session.get("username")
     if not upload or not upload.filename:
-        return jsonify({"status": "error", "message": "Please choose a CSV file to upload."}), 400
+        return jsonify({"status": "error", "message": "Please choose a CSV or Excel file to upload."}), 400
 
     user_search_keys = get_user_search_keys(username) if username else {}
     set_search_context(user_search_keys)
@@ -408,36 +408,95 @@ def add_companies_bulk():
             "message": "No Web Search API key added. Please add a Tavily or Serper API key in Settings before running bulk research."
         }), 400
 
-    try:
-        raw = upload.read().decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return jsonify({"status": "error", "message": "Could not read the file. Please upload a UTF-8 CSV."}), 400
+    filename = upload.filename.lower()
+    rows_data = []
 
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames or not any(
-        (name or "").strip().lower() == "company_name" for name in reader.fieldnames
-    ):
-        return jsonify({
-            "status": "error",
-            "message": "CSV must have a 'company_name' column (a 'website' column is optional)."
-        }), 400
+    # 1. Handle Excel files (.xlsx, .xls)
+    if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(upload, data_only=True)
+            ws = wb.active
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows or len(rows) < 2:
+                return jsonify({"status": "error", "message": "Excel file is empty or missing data rows."}), 400
+            
+            headers = [str(h or "").strip().lower() for h in rows[0]]
+            name_idx = None
+            web_idx = None
 
-    field_map = {(name or "").strip().lower(): name for name in reader.fieldnames}
-    name_key = field_map["company_name"]
-    website_key = field_map.get("website")
+            for idx, h in enumerate(headers):
+                if h in ["company_name", "company name", "company", "name", "organization", "organisation"]:
+                    name_idx = idx
+                elif h in ["website", "website url", "url", "web", "domain", "link"]:
+                    web_idx = idx
+
+            if name_idx is None:
+                return jsonify({
+                    "status": "error",
+                    "message": "Excel sheet must have a 'company_name' or 'company' column."
+                }), 400
+
+            for r in rows[1:]:
+                if not r or len(r) <= name_idx:
+                    continue
+                c_name = str(r[name_idx] or "").strip()
+                w_url = str(r[web_idx] or "").strip() if (web_idx is not None and len(r) > web_idx) else ""
+                if c_name and c_name.lower() not in ["none", "nan", "null"]:
+                    rows_data.append({"company_name": c_name, "website": w_url})
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"Could not read Excel file: {str(e)}"}), 400
+
+    # 2. Handle CSV files with multi-encoding fallback
+    else:
+        content_bytes = upload.read()
+        raw_text = None
+        for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252", "iso-8859-1"]:
+            try:
+                raw_text = content_bytes.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+
+        if raw_text is None:
+            raw_text = content_bytes.decode("utf-8", errors="replace")
+
+        reader = csv.DictReader(io.StringIO(raw_text))
+        if not reader.fieldnames:
+            return jsonify({"status": "error", "message": "CSV file appears empty."}), 400
+
+        name_key = None
+        website_key = None
+        for col in reader.fieldnames:
+            clean_col = (col or "").strip().lower()
+            if clean_col in ["company_name", "company name", "company", "name", "organization", "organisation"]:
+                name_key = col
+            elif clean_col in ["website", "website url", "url", "web", "domain", "link"]:
+                website_key = col
+
+        if not name_key:
+            return jsonify({
+                "status": "error",
+                "message": "CSV must have a 'company_name' or 'company' column header (website is optional)."
+            }), 400
+
+        for row in reader:
+            c_name = (row.get(name_key) or "").strip()
+            w_url = (row.get(website_key) or "").strip() if website_key else ""
+            if c_name:
+                rows_data.append({"company_name": c_name, "website": w_url})
 
     started = []
     seen_names = set()
     skipped = 0
 
-    for row in reader:
+    for item in rows_data:
         if len(started) >= MAX_BULK_ROWS:
             skipped += 1
             continue
 
-        company_name = (row.get(name_key) or "").strip()
-        website = (row.get(website_key) or "").strip() if website_key else ""
-
+        company_name = item["company_name"]
+        website = item["website"]
         dedupe_key = company_name.lower()
         if not company_name or dedupe_key in seen_names:
             skipped += 1
@@ -452,7 +511,7 @@ def add_companies_bulk():
         started.append({"company_id": company_id, "company_name": company_name})
 
     if not started:
-        return jsonify({"status": "error", "message": "No valid company names found in the CSV."}), 400
+        return jsonify({"status": "error", "message": "No valid company names found in the file."}), 400
 
     return jsonify({"status": "started", "started": started, "skipped": skipped}), 202
 

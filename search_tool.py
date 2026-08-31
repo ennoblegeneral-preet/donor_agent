@@ -149,8 +149,8 @@ def _recent_indian_fiscal_years(count: int = 3) -> list:
     return [f"FY{str(latest_completed_fy_end_year - i)[-2:]}" for i in range(count)]
 
 
-def _serper_search(query: str, max_results: int = 5, api_key: str = None) -> dict:
-    """Execute search using Google Serper API."""
+def _serper_search(query: str, max_results: int = 5, api_key: str = None, retries: int = 3) -> dict:
+    """Execute search using Google Serper API with automatic retries."""
     key = api_key or (os.getenv("SERPER_API_KEY") or os.getenv("serper_api_key") or "").strip().strip('"').strip("'")
     if not key:
         raise ValueError("No Serper API key found. Please add your Serper API key in Settings.")
@@ -166,33 +166,50 @@ def _serper_search(query: str, max_results: int = 5, api_key: str = None) -> dic
         "gl": "in",
         "hl": "en"
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
 
-    results = []
-    kg = data.get("knowledgeGraph") or {}
-    if kg.get("description"):
-        desc = f"{kg.get('title', '')}: {kg.get('description', '')}"
-        results.append({
-            "title": kg.get("title", ""),
-            "url": kg.get("website") or kg.get("descriptionUrl") or "",
-            "content": desc,
-            "raw_content": desc
-        })
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=25)
+            resp.raise_for_status()
+            data = resp.json()
 
-    for item in data.get("organic", []):
-        snippet = item.get("snippet", "")
-        sitelinks = " ".join([s.get("snippet", "") for s in item.get("sitelinks", []) if s.get("snippet")])
-        full_content = f"{snippet} {sitelinks}".strip()
-        results.append({
-            "title": item.get("title", ""),
-            "url": item.get("link", ""),
-            "content": full_content,
-            "raw_content": full_content
-        })
+            results = []
+            kg = data.get("knowledgeGraph") or {}
+            if kg.get("description"):
+                desc = f"{kg.get('title', '')}: {kg.get('description', '')}"
+                results.append({
+                    "title": kg.get("title", ""),
+                    "url": kg.get("website") or kg.get("descriptionUrl") or "",
+                    "content": desc,
+                    "raw_content": desc
+                })
 
-    return {"results": results}
+            for item in data.get("organic", []):
+                snippet = item.get("snippet", "")
+                sitelinks = " ".join([s.get("snippet", "") for s in item.get("sitelinks", []) if s.get("snippet")])
+                full_content = f"{snippet} {sitelinks}".strip()
+                results.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("link", ""),
+                    "content": full_content,
+                    "raw_content": full_content
+                })
+
+            return {"results": results}
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                print(f"[Serper Warning] Network glitch on attempt {attempt+1}/{retries}, retrying in {attempt+1}s...")
+                time.sleep(1 * (attempt + 1))
+            else:
+                raise last_exc
+        except Exception as exc:
+            raise exc
+
+    if last_exc:
+        raise last_exc
+    return {"results": []}
 
 
 def _tavily_search_with_limit(query: str, max_results: int = 5, include_raw_content: bool = False, retries: int = 5, api_key: str = None) -> dict:
@@ -420,30 +437,113 @@ def _normalize_screener_company_name(company_name: str) -> str:
     return re.sub(r"\s+", " ", (company_name or "").replace(".", "")).strip()
 
 
+_LEGAL_SUFFIXES_REGEX = re.compile(
+    r"\b(pvt\.?|private|ltd\.?|limited|llp|inc\.?|corp\.?|corporation|holdings?|enterprises?|industries|technologies|tech|solutions|india|group|international)\b",
+    re.IGNORECASE,
+)
+
+def _clean_base_company_name(name: str) -> str:
+    """Extract clean base brand name for search fallback."""
+    cleaned = re.sub(r"[\.,\-&/()'\"]+", " ", name or "")
+    cleaned = _LEGAL_SUFFIXES_REGEX.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+
 def find_company_on_screener(company_name: str):
+    """
+    Multi-stage Screener resolution with automatic typo/spelling correction:
+    1. Direct search on Screener API
+    2. Suffix-stripped base brand name on Screener API
+    3. Google/Serper spell-corrected search for site:screener.in/company/
+    4. First-two tokens query fallback
+    """
+    if not company_name or not company_name.strip():
+        return None, None
+
+    # Step 1: Direct Screener API Search
     try:
-        screener_query = _normalize_screener_company_name(company_name)
+        norm_query = _normalize_screener_company_name(company_name)
         response = requests.get(
             "https://www.screener.in/api/company/search/",
-            params={"q": screener_query},
+            params={"q": norm_query},
             headers=SCREENER_HEADERS,
-            timeout=10
+            timeout=10,
         )
-        response.raise_for_status()
-        results = response.json()
-
-        if not results:
-            print(f"[Screener] '{company_name}' Screener pe nahi mila")
-            return None, None
-
-        top = results[0]
-        screener_url = "https://www.screener.in" + top["url"]
-        print(f"[Screener] Company mila: {top.get('name')} -> {screener_url}")
-        return {"name": top.get("name"), "url": screener_url}, None
-
+        if response.ok:
+            results = response.json()
+            if results:
+                top = results[0]
+                screener_url = "https://www.screener.in" + top["url"]
+                print(f"[Screener] Direct match mila: {top.get('name')} -> {screener_url}")
+                return {"name": top.get("name"), "url": screener_url}, None
     except Exception as e:
-        print(f"[Screener Error] Company search failed: {e}")
-        return None, classify_error(e)
+        print(f"[Screener Warning] Direct search failed: {e}")
+
+    # Step 2: Suffix-stripped base brand name
+    base_name = _clean_base_company_name(company_name)
+    if base_name and len(base_name) >= 3 and base_name.lower() != company_name.lower():
+        try:
+            print(f"[Screener] Trying base brand name: '{base_name}'")
+            response = requests.get(
+                "https://www.screener.in/api/company/search/",
+                params={"q": base_name},
+                headers=SCREENER_HEADERS,
+                timeout=10,
+            )
+            if response.ok:
+                results = response.json()
+                if results:
+                    top = results[0]
+                    screener_url = "https://www.screener.in" + top["url"]
+                    print(f"[Screener] Base name match mila: {top.get('name')} -> {screener_url}")
+                    return {"name": top.get("name"), "url": screener_url}, None
+        except Exception as e:
+            print(f"[Screener Warning] Base name search failed: {e}")
+
+    # Step 3: Google/Serper Spell-Corrected Search Fallback (Handles typos like 'Dalmya Bharat' or 'Infosis')
+    try:
+        print(f"[Screener] Searching Google/Serper with spell-correction: '{company_name}'")
+        search_query = f"{company_name} screener.in company"
+        google_results = _execute_search(search_query, max_results=3, include_raw_content=False)
+        for r in google_results.get("results", []):
+            url = r.get("url", "")
+            match = re.search(r"https://www\.screener\.in/company/([A-Za-z0-9_-]+)/?", url, re.IGNORECASE)
+            if match:
+                canonical_url = f"https://www.screener.in/company/{match.group(1).upper()}/consolidated/"
+                title = r.get("title", "")
+                resolved_name = title.split("-")[0].split("share price")[0].split("|")[0].strip() or company_name
+                print(f"[Screener] Google fuzzy/spell-corrected match mila: '{resolved_name}' -> {canonical_url}")
+                return {"name": resolved_name, "url": canonical_url}, None
+    except Exception as e:
+        print(f"[Screener Warning] Google fallback search failed: {e}")
+
+    # Step 4: First two words fallback
+    words = [w for w in re.findall(r"\w+", company_name) if len(w) > 2]
+    if len(words) >= 2:
+        short_query = " ".join(words[:2])
+        try:
+            print(f"[Screener] Trying short 2-token query: '{short_query}'")
+            response = requests.get(
+                "https://www.screener.in/api/company/search/",
+                params={"q": short_query},
+                headers=SCREENER_HEADERS,
+                timeout=10,
+            )
+            if response.ok:
+                results = response.json()
+                if results:
+                    top = results[0]
+                    screener_url = "https://www.screener.in" + top["url"]
+                    print(f"[Screener] Short query match mila: {top.get('name')} -> {screener_url}")
+                    return {"name": top.get("name"), "url": screener_url}, None
+        except Exception as e:
+            print(f"[Screener Warning] Short query search failed: {e}")
+
+    print(f"[Screener] '{company_name}' Screener pe kisi bhi method se nahi mila")
+    return None, None
+
 
 
 _RELIABLE_REPORT_HOSTS = ("bseindia.com", "nseindia.com")

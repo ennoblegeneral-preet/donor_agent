@@ -90,14 +90,14 @@
     </form>
     <button type="button" class="mt-3 font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1" onclick="document.getElementById('bulkImportPanel').classList.toggle('hidden')">
         <span class="material-symbols-outlined text-[16px]">upload_file</span>
-        Bulk import from CSV
+        Bulk import from CSV / Excel
     </button>
     <div id="bulkImportPanel" class="hidden mt-3 pt-3 border-t border-outline-variant/20">
         <form id="bulkUploadForm" class="flex flex-col md:flex-row gap-3 items-stretch md:items-center" enctype="multipart/form-data">
-            <input type="file" name="csv_file" accept=".csv" required class="flex-grow font-body-sm text-body-sm text-on-surface-variant">
+            <input type="file" name="csv_file" accept=".csv, .xlsx, .xls" required class="flex-grow font-body-sm text-body-sm text-on-surface-variant">
             <button type="submit" class="btn-secondary px-5 py-2.5 rounded-lg font-label-md text-label-md whitespace-nowrap">Upload &amp; Run Pipeline</button>
         </form>
-        <p class="font-body-sm text-body-sm text-on-surface-variant mt-2">Columns: <code>company_name</code> (required), <code>website</code> (optional).</p>
+        <p class="font-body-sm text-body-sm text-on-surface-variant mt-2">Supports <strong>.csv</strong> and <strong>.xlsx</strong> files. Columns: <code>company_name</code> (required), <code>website</code> (optional).</p>
         <div id="bulkStatus" class="font-body-sm text-body-sm text-on-surface-variant mt-2"></div>
         <div id="bulkProgressPanel" class="hidden mt-3 rounded-lg border border-outline-variant/30 bg-[#0F1117]/70 p-3">
             <div class="flex items-center justify-between gap-3">
