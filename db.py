@@ -156,15 +156,24 @@ def create_company(company_name: str, website: str = None, created_by: str = Non
     return str(result.inserted_id)
 
 
-def _find_company_col(company_id: str):
+def _find_company_col(company_id: str, username: str = None):
     """
     Search through all per-user company collections (companies_*) and the
     legacy flat collection to find which one holds this company_id.
     Returns (collection, document) or (None, None).
     """
     oid = ObjectId(company_id)
+
+    # Prefer the requesting user's collection when available.  The fallback
+    # search preserves support for admin/legacy records and older callers.
+    if username:
+        user_col = _user_col(username)
+        doc = user_col.find_one({"_id": oid})
+        if doc:
+            return user_col, doc
+
     for col_name in db.list_collection_names():
-        if col_name.startswith("companies_"):
+        if col_name.startswith("companies_") and (not username or col_name != user_col.name):
             col = db[col_name]
             doc = col.find_one({"_id": oid})
             if doc:
@@ -176,15 +185,15 @@ def _find_company_col(company_id: str):
     return None, None
 
 
-def get_company(company_id: str) -> dict:
+def get_company(company_id: str, username: str = None) -> dict:
     """Find a company by ID across all user collections."""
-    _, doc = _find_company_col(company_id)
+    _, doc = _find_company_col(company_id, username=username)
     return doc
 
 
-def update_company(company_id: str, updates: dict):
+def update_company(company_id: str, updates: dict, username: str = None):
     """Update a company in whichever user collection it belongs to."""
-    col, _ = _find_company_col(company_id)
+    col, _ = _find_company_col(company_id, username=username)
     if col is not None:
         col.update_one({"_id": ObjectId(company_id)}, {"$set": updates})
 
