@@ -1,0 +1,794 @@
+{% extends "base_app.html" %}
+{% set active_nav = 'dashboard' %}
+{% block title %}Dashboard - DonorIQ{% endblock %}
+{% block page_kicker %}
+<p class="font-label-md text-label-md text-primary uppercase tracking-wider mb-1 flex items-center gap-2">
+    <span class="w-1.5 h-1.5 rounded-full bg-primary pulse-active"></span>
+    Research intelligence workspace
+</p>
+{% endblock %}
+{% block page_title %}Research Dashboard{% endblock %}
+{% block page_subtitle %}Overview of your current intelligence pipeline.{% endblock %}
+
+{% block content %}
+{% if db_error %}
+<div class="glass-card rounded-xl p-stack-md mb-stack-lg flex items-center gap-3" style="border-color: rgba(239,68,68,0.35);">
+    <span class="text-[24px]">⚠️</span>
+    <div class="font-body-sm text-body-sm text-on-surface"><strong>Database Error:</strong> {{ db_error }}</div>
+</div>
+{% endif %}
+
+{% if not search_configured %}
+<div class="glass-card rounded-xl p-stack-md mb-stack-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4" style="border-color: rgba(234, 179, 8, 0.45); background: rgba(234, 179, 8, 0.08);">
+    <div class="flex items-center gap-3">
+        <span class="material-symbols-outlined text-yellow-400 text-[28px] shrink-0">vpn_key_alert</span>
+        <div>
+            <h4 class="font-label-md text-label-md text-yellow-200 font-semibold">Web Search API Key Missing</h4>
+            <p class="font-body-sm text-body-sm text-yellow-300/80">No Web Search API key added. Add your Serper or Tavily API key to run company research pipelines.</p>
+        </div>
+    </div>
+    <a href="/settings/search" class="btn-primary font-label-md text-label-md px-4 py-2 rounded-lg shrink-0 flex items-center gap-1.5 shadow-md">
+        <span class="material-symbols-outlined text-[16px]">add_link</span>
+        Configure Search Key
+    </a>
+</div>
+{% endif %}
+
+{% set ns = namespace(pending=0) %}
+{% for c in companies %}{% if c.status not in ['scored', 'failed_research'] %}{% set ns.pending = ns.pending + 1 %}{% endif %}{% endfor %}
+
+<div class="grid grid-cols-2 md:grid-cols-5 gap-gutter mb-stack-lg">
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-primary/70 text-[20px]">corporate_fare</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Total Companies</h3>
+        </div>
+        <div class="font-display-lg text-display-lg text-on-surface">{{ count | commas }}</div>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-secondary/70 text-[20px]">hourglass_empty</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Pending Research</h3>
+        </div>
+        <div class="font-display-lg text-display-lg text-on-surface">{{ ns.pending | commas }}</div>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-primary-container/70 text-[20px]">check_circle</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Approved</h3>
+        </div>
+        <div class="font-display-lg text-display-lg text-on-surface">{{ companies | selectattr('approval_status', 'equalto', 'approved') | list | length | commas }}</div>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-tertiary/70 text-[20px]">workspace_premium</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Tier-A</h3>
+        </div>
+        <div class="font-display-lg text-display-lg text-on-surface text-tertiary">{{ companies | selectattr('tier', 'equalto', 'Tier A') | list | length | commas }}</div>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-secondary/70 text-[20px]">cloud_done</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">In Zoho</h3>
+        </div>
+        <div class="font-display-lg text-display-lg text-on-surface">{{ companies | selectattr('upload_status', 'equalto', 'uploaded') | list | length | commas }}</div>
+    </div>
+</div>
+
+<!-- Start Research -->
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <form action="/research" method="post" class="flex flex-col md:flex-row gap-4 items-stretch md:items-center" id="addCompanyForm">
+        <div class="relative w-full flex-grow ambient-glow rounded-lg">
+            <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-[24px]">search</span>
+            <input name="company_name" required class="w-full bg-[#0F1117] border border-[#2E3245] rounded-lg pl-14 pr-4 py-4 font-body-lg text-body-lg text-on-surface focus:outline-none focus:border-primary transition-colors" placeholder="Research a new company..." type="text">
+        </div>
+        <input name="website" class="w-full md:w-64 bg-[#0F1117] border border-[#2E3245] rounded-lg px-4 py-4 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary transition-colors" placeholder="Website URL (optional)" type="url">
+        <button type="submit" class="w-full md:w-auto btn-primary px-8 py-4 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center justify-center gap-2">
+            <span>Start Research</span>
+            <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+        </button>
+    </form>
+    <button type="button" class="mt-3 font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors flex items-center gap-1" onclick="document.getElementById('bulkImportPanel').classList.toggle('hidden')">
+        <span class="material-symbols-outlined text-[16px]">upload_file</span>
+        Bulk import from CSV
+    </button>
+    <div id="bulkImportPanel" class="hidden mt-3 pt-3 border-t border-outline-variant/20">
+        <form id="bulkUploadForm" class="flex flex-col md:flex-row gap-3 items-stretch md:items-center" enctype="multipart/form-data">
+            <input type="file" name="csv_file" accept=".csv" required class="flex-grow font-body-sm text-body-sm text-on-surface-variant">
+            <button type="submit" class="btn-secondary px-5 py-2.5 rounded-lg font-label-md text-label-md whitespace-nowrap">Upload &amp; Run Pipeline</button>
+        </form>
+        <p class="font-body-sm text-body-sm text-on-surface-variant mt-2">Columns: <code>company_name</code> (required), <code>website</code> (optional).</p>
+        <div id="bulkStatus" class="font-body-sm text-body-sm text-on-surface-variant mt-2"></div>
+        <div id="bulkProgressPanel" class="hidden mt-3 rounded-lg border border-outline-variant/30 bg-[#0F1117]/70 p-3">
+            <div class="flex items-center justify-between gap-3">
+                <span class="font-label-md text-label-md text-on-surface">Bulk research progress</span>
+                <span id="bulkProgressCount" class="font-mono-sm text-mono-sm text-on-surface-variant">0 of 0</span>
+            </div>
+            <div class="progress-track mt-2"><div id="bulkProgressBar" class="progress-bar" style="width:0%;"></div></div>
+            <div id="bulkCompanyProgress" class="mt-3 grid gap-2"></div>
+        </div>
+    </div>
+</div>
+
+{% if not companies %}
+<div id="emptyState" class="glass-panel rounded-xl p-stack-lg text-center" style="padding: 4rem 2rem;">
+    <div class="text-[48px] mb-4">📂</div>
+    <p class="font-body-md text-body-md text-on-surface-variant">No companies in the database yet. Add one above to kick off the multi-agent pipeline.</p>
+</div>
+{% else %}
+
+<!-- Filter & Sort Bar -->
+<div class="flex flex-col md:flex-row justify-between items-center mb-stack-md gap-4 border-b border-[#2E3245] pb-2">
+    <div class="flex gap-6 overflow-x-auto w-full md:w-auto no-scrollbar" id="filterTabs">
+        <button class="filter-tab font-label-md text-label-md text-primary border-b-2 border-primary pb-2 whitespace-nowrap" data-filter="all">All</button>
+        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="researching">Researching</button>
+        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="scored">Scored</button>
+        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="tier-a">Tier-A</button>
+        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="tier-b">Tier-B</button>
+        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="prospect">Prospect</button>
+    </div>
+    <div class="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
+        <div class="relative">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
+            <input id="companySearch" type="search" class="bg-[#1A1D2E] border border-[#2E3245] rounded pl-8 pr-3 py-1.5 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary" placeholder="Search companies" style="width: 180px;">
+        </div>
+        <span class="font-body-sm text-body-sm text-on-surface-variant">Sort:</span>
+        <select id="sortSelect" class="font-label-md text-label-md text-on-surface bg-[#1A1D2E] border border-[#2E3245] px-3 py-1.5 rounded focus:outline-none">
+            <option value="score-desc">Score (High to Low)</option>
+            <option value="score-asc">Score (Low to High)</option>
+            <option value="name">Name (A-Z)</option>
+            <option value="newest">Newest first</option>
+        </select>
+        <button type="button" id="zohoSelectToggle" class="btn-secondary font-label-md text-label-md px-3 py-1.5 rounded-lg flex items-center gap-1" onclick="toggleZohoSelectMode()">
+            <span class="material-symbols-outlined text-[16px]">playlist_add_check</span>
+            Select for Zoho
+        </button>
+        <button type="button" id="deleteSelectToggle" class="btn-secondary font-label-md text-label-md px-3 py-1.5 rounded-lg flex items-center gap-1" onclick="toggleDeleteSelectMode()">
+            <span class="material-symbols-outlined text-[16px]">delete_sweep</span>
+            Select to Delete
+        </button>
+        <button type="button" id="emailSelectToggle" class="btn-secondary font-label-md text-label-md px-3 py-1.5 rounded-lg flex items-center gap-1" onclick="toggleEmailSelectMode()">
+            <span class="material-symbols-outlined text-[16px]">mail</span>
+            Email Excel
+        </button>
+    </div>
+</div>
+
+<div id="emailSelectBar" class="hidden glass-card rounded-xl p-stack-md mb-stack-md flex items-center justify-between flex-wrap gap-3">
+    <span class="font-body-sm text-body-sm text-on-surface-variant"><strong id="emailSelectedCount">0</strong> selected</span>
+    <div class="flex items-center gap-2">
+        <button type="button" class="btn-secondary font-label-md text-label-md px-4 py-2 rounded-lg" onclick="toggleEmailSelectMode()">Cancel</button>
+        <button type="button" id="emailSelectedBtn" class="btn-primary font-label-md text-label-md px-4 py-2 rounded-lg" disabled onclick="sendBulkResearchEmail()">✉ Email Combined Excel</button>
+    </div>
+</div>
+
+<!-- Bulk Zoho upload action bar (hidden until select mode is on) -->
+<div id="zohoSelectBar" class="hidden glass-card rounded-xl p-stack-md mb-stack-md flex items-center justify-between flex-wrap gap-3">
+    <span class="font-body-sm text-body-sm text-on-surface-variant"><strong id="zohoSelectedCount">0</strong> selected (Tier A/B, or approved Tier C)</span>
+    <div class="flex items-center gap-2">
+        <button type="button" class="btn-secondary font-label-md text-label-md px-4 py-2 rounded-lg" onclick="toggleZohoSelectMode()">Cancel</button>
+        <button type="button" id="zohoUploadBtn" class="btn-primary font-label-md text-label-md px-4 py-2 rounded-lg" disabled onclick="startBulkZohoUpload()">⬆ Upload Selected to Zoho</button>
+    </div>
+</div>
+
+<!-- Bulk delete action bar (hidden until delete-select mode is on) -->
+<div id="deleteSelectBar" class="hidden glass-card rounded-xl p-stack-md mb-stack-md flex items-center justify-between flex-wrap gap-3">
+    <span class="font-body-sm text-body-sm text-on-surface-variant"><strong id="deleteSelectedCount">0</strong> selected for deletion</span>
+    <div class="flex items-center gap-2">
+        <button type="button" class="btn-secondary font-label-md text-label-md px-4 py-2 rounded-lg" onclick="toggleDeleteSelectMode()">Cancel</button>
+        <button type="button" id="deleteSelectedBtn" class="font-label-md text-label-md px-4 py-2 rounded-lg" disabled onclick="startBulkDelete()" style="background:#e11d48; color:#fff; opacity:1;">🗑 Delete Selected</button>
+    </div>
+</div>
+
+<!-- Company Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter" id="companyGrid">
+    {% for c in companies %}
+    {% set is_pending = c.get('status', 'pending') not in ['scored', 'failed_research'] %}
+    {% set score = c.get('score') %}
+    {% set ring_color = 'text-tertiary' if c.get('tier') == 'Tier A' else ('text-primary' if c.get('tier') == 'Tier B' else ('text-amber-500' if c.get('tier') in ['Tier C', 'Nurture', 'Medium', 'Medium Fit'] else 'text-on-surface-variant')) %}
+    <div class="company-card glass-card rounded-xl p-stack-md flex flex-col hover:border-primary/50 transition-colors duration-300 group {% if c.tier == 'Tier A' %}border-t-2 border-t-tertiary{% endif %}"
+         style="position:relative;"
+         data-name="{{ c.company_name | lower }}"
+         data-status="{{ c.status }}"
+         data-tier="{{ c.tier or '' }}"
+         data-stage="{{ c.get('record_stage', '') }}"
+         data-score="{{ score }}"
+         data-created="{{ c.created_at.isoformat() if c.get('created_at') else '' }}">
+        {% if c.get('tier') in ['Tier A', 'Tier B'] or (c.get('tier') == 'Tier C' and c.approval_status == 'approved') %}
+        <label class="zoho-select-checkbox hidden" style="position:absolute; top:10px; left:10px; z-index:2; width:20px; height:20px;">
+            <input type="checkbox" class="zoho-select-input" data-id="{{ c.id_str }}" data-name="{{ c.company_name }}" onchange="updateZohoSelection()" style="width:18px; height:18px; cursor:pointer;">
+        </label>
+        {% endif %}
+        <label class="del-select-checkbox hidden" style="position:absolute; top:10px; left:10px; z-index:3; width:20px; height:20px;">
+            <input type="checkbox" class="del-select-input" data-id="{{ c.id_str }}" data-name="{{ c.company_name }}" onchange="updateDeleteSelection()" style="width:18px; height:18px; cursor:pointer; accent-color:#e11d48;">
+        </label>
+        <label class="email-select-checkbox hidden" style="position:absolute; top:10px; left:34px; z-index:3; width:20px; height:20px;">
+            <input type="checkbox" class="email-select-input" data-id="{{ c.id_str }}" onchange="updateEmailSelection()" style="width:18px; height:18px; cursor:pointer; accent-color:#38bdf8;">
+        </label>
+        <a href="/company/{{ c.id_str }}" class="flex flex-col flex-grow" style="text-decoration:none; color:inherit;">
+        <div class="flex justify-between items-start mb-4">
+            <div>
+                <h3 class="font-headline-md text-headline-md text-on-surface mb-1">{{ c.company_name }}</h3>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="w-1.5 h-1.5 rounded-full {% if is_pending %}bg-secondary pulse-active{% elif c.status == 'failed_research' %}bg-rose-400{% else %}bg-emerald-400{% endif %}"></span>
+                    <span class="font-mono-sm text-mono-sm uppercase tracking-wider {% if is_pending %}text-secondary/90{% elif c.status == 'failed_research' %}text-rose-400/90{% else %}text-emerald-400/90{% endif %}">{{ c.status | replace('_', ' ') }}</span>
+                    {% if c.get('pipeline_warnings') %}
+                    <span class="font-label-md text-label-md" title="{{ c.pipeline_warnings | map(attribute='stage') | list | join(', ') }}: {{ c.pipeline_warnings | map(attribute='message') | list | join(' | ') }}" style="display:inline-block; padding:2px 8px; border-radius:10px; background:rgba(249,115,22,0.15); color:#f97316; border:1px solid rgba(249,115,22,0.35);">
+                        ⚠ {{ c.pipeline_warnings | length }}
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            {% if score is not none and score >= 0 %}
+            <div class="relative w-12 h-12 flex items-center justify-center shrink-0">
+                <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                    <path class="{{ ring_color }}/10" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path>
+                    <path class="{{ ring_color }} progress-ring__circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="100, 100" stroke-dashoffset="{{ 100 - score }}" stroke-linecap="round" stroke-width="3"></path>
+                </svg>
+                <span class="absolute font-label-md text-label-md text-on-surface">{{ score }}</span>
+            </div>
+            {% endif %}
+        </div>
+        {% set fin = c.get('financial_data') or {} %}
+        {% set fy_list = fin.get('fiscal_years') or [] %}
+        {% set latest_turnover = (fin.get('turnover') or {}).get(fy_list[0]) if fy_list else None %}
+        <div class="grid grid-cols-3 gap-2 mb-stack-md py-3 border-t border-[#2E3245]/50">
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Sector</p>
+                <p class="font-body-md text-body-md text-on-surface truncate" style="font-size:12px;">{{ (c.get('research_json') or {}).get('industry', '-') }}</p>
+            </div>
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Turnover</p>
+                <p class="font-body-md text-body-md text-on-surface truncate font-semibold" style="font-size:12px;">
+                    {% if latest_turnover is not none and latest_turnover != '-' %}
+                        ₹{{ latest_turnover | commas }} Cr
+                    {% else %}
+                        -
+                    {% endif %}
+                </p>
+            </div>
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Lead Status</p>
+                <p class="font-body-md text-body-md {% if c.get('record_stage') == 'Prospect' %}text-tertiary font-medium{% else %}text-on-surface-variant italic{% endif %}" style="font-size:12px;">{{ c.get('record_stage', 'New') }}</p>
+            </div>
+        </div>
+        {% set card_partners = (c.get('csr_data', {}) or {}).get('implementation_partners') or (c.get('research_json', {}) or {}).get('existing_implementation_partners') or [] %}
+        {% set card_comm = (c.get('csr_data', {}) or {}).get('committee_members') or c.get('committee_members') or [] %}
+        {% set card_comm_li = c.get('_committee_members_linkedin_lookup') or {} %}
+        {% if card_partners or card_comm %}
+        <div class="flex items-center gap-2 mb-3 flex-wrap font-body-sm" style="font-size: 11px;">
+            {% if card_partners %}
+            <span style="background: rgba(168, 85, 247, 0.15); color: #d8b4fe; padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(168, 85, 247, 0.3);" title="{{ card_partners | join(', ') }}">
+                🤝 {{ card_partners | length }} NGO Partner{% if card_partners | length > 1 %}s{% endif %}
+            </span>
+            {% endif %}
+            {% if card_comm %}
+                {% for member in card_comm[:2] %}
+                    {% set li = card_comm_li.get(member|string|trim|lower) %}
+                    {% if li %}
+                    <span onclick="event.stopPropagation(); window.open('{{ li }}', '_blank');" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(34, 197, 94, 0.3); cursor: pointer; display: inline-flex; align-items: center; gap: 3px;" title="{{ member }} (LinkedIn Available)">
+                        👤 {{ member }} 🔗
+                    </span>
+                    {% else %}
+                    <span style="background: rgba(34, 197, 94, 0.15); color: #4ade80; padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(34, 197, 94, 0.3);" title="{{ member }}">
+                        👤 {{ member }}
+                    </span>
+                    {% endif %}
+                {% endfor %}
+                {% if card_comm | length > 2 %}
+                <span style="background: rgba(34, 197, 94, 0.10); color: #86efac; padding: 2px 6px; border-radius: 6px; font-size: 10px;" title="{{ card_comm[2:] | join(', ') }}">
+                    +{{ card_comm | length - 2 }} more
+                </span>
+                {% endif %}
+            {% endif %}
+        </div>
+        {% endif %}
+        <div class="mt-auto pt-2">
+            <span class="w-full btn-secondary font-label-md text-label-md py-2.5 rounded-lg flex items-center justify-center gap-2 group-hover:bg-primary/10 group-hover:border-primary/30 transition-all">
+                View Details
+                <span class="material-symbols-outlined text-[16px] group-hover:translate-x-1 transition-transform">arrow_forward</span>
+            </span>
+        </div>
+        </a>
+    </div>
+    {% endfor %}
+</div>
+<p id="noResultsMsg" class="hidden font-body-sm text-body-sm text-on-surface-variant text-center py-stack-lg">No companies match this filter.</p>
+{% endif %}
+
+<!-- Bulk Zoho upload progress modal -->
+<div id="zohoBulkModal" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="zohoBulkTitle">
+    <div class="modal-box">
+        <h2 class="modal-title" id="zohoBulkTitle">Uploading to Zoho</h2>
+        <p class="modal-subtitle" id="zohoBulkMessage">Starting upload…</p>
+        <div class="progress-track"><div class="progress-bar" id="zohoBulkBar" style="width:0%;"></div></div>
+        <div id="zohoBulkResults" style="max-height:220px; overflow-y:auto; margin-top:14px; font-size:13px;"></div>
+        <div class="modal-actions" style="margin-top:16px;">
+            <button type="button" class="modal-btn modal-btn-cancel" id="zohoBulkCloseBtn" style="display:none;" onclick="closeZohoBulkModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Live pipeline progress modal -->
+<div id="pipelineModal" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="pipelineTitle">
+    <div class="modal-box pipeline-modal">
+        <div class="pipeline-modal-header">
+            <span class="section-kicker">Live pipeline activity</span>
+            <button type="button" class="pipeline-minimize-btn" id="pipelineMinimizeBtn" onclick="togglePipelineMinimize()" aria-label="Minimize processing card" title="Minimize">−</button>
+        </div>
+        <div class="pipeline-orb"><span></span></div>
+        <h2 class="modal-title" id="pipelineTitle">Preparing your research</h2>
+        <p class="modal-subtitle" id="pipelineMessage">Adding the company to the pipeline.</p>
+        <div class="progress-track"><div class="progress-bar" id="pipelineBar"></div></div>
+        <ol class="pipeline-steps" id="pipelineSteps">
+            <li data-stage="queued"><span>1</span><div><strong>Queue company</strong><small>Set up the research job</small></div></li>
+            <li data-stage="research"><span>2</span><div><strong>Research company</strong><small>Gather public company and CSR information</small></div></li>
+            <li data-stage="compliance"><span>3</span><div><strong>Check compliance</strong><small>Assess eligibility signals</small></div></li>
+            <li data-stage="scoring"><span>4</span><div><strong>Score fit</strong><small>Calculate partnership potential</small></div></li>
+            <li data-stage="contacts"><span>5</span><div><strong>Find contacts</strong><small>For high-fit leads only</small></div></li>
+        </ol>
+        <p class="pipeline-note">This shows work stages and results, not private model reasoning.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let pipelinePoller = null;
+
+    function togglePipelineMinimize() {
+        const modal = document.getElementById('pipelineModal');
+        const button = document.getElementById('pipelineMinimizeBtn');
+        const minimized = modal.classList.toggle('pipeline-minimized');
+        button.textContent = minimized ? '+' : '−';
+        button.title = minimized ? 'Show processing details' : 'Minimize';
+        button.setAttribute('aria-label', minimized ? 'Show processing details' : 'Minimize processing card');
+    }
+
+    function updatePipelineUI(progress) {
+        document.getElementById('pipelineMessage').textContent = progress.message;
+        document.getElementById('pipelineBar').style.width = `${progress.percent || 0}%`;
+        const stages = ['queued', 'research', 'compliance', 'scoring', 'contacts'];
+        const currentIndex = stages.indexOf(progress.stage);
+        document.querySelectorAll('#pipelineSteps li').forEach((item, index) => {
+            item.classList.toggle('is-active', item.dataset.stage === progress.stage && progress.state === 'running');
+            item.classList.toggle('is-complete', currentIndex > index || progress.state === 'complete');
+            item.classList.toggle('is-error', progress.state === 'error' && item.dataset.stage === progress.stage);
+        });
+    }
+
+    function startPipelineProgress(companyId) {
+        const modal = document.getElementById('pipelineModal');
+        modal.classList.remove('pipeline-minimized');
+        document.getElementById('pipelineMinimizeBtn').textContent = '−';
+        modal.style.display = 'flex';
+        pipelinePoller = setInterval(async () => {
+            try {
+                const response = await fetch(`/research-progress/${companyId}`);
+                const progress = await response.json();
+                if (!response.ok) throw new Error(progress.message);
+                updatePipelineUI(progress);
+                if (progress.state === 'complete' || progress.state === 'error') {
+                    clearInterval(pipelinePoller);
+                    setTimeout(() => window.location.reload(), 1400);
+                }
+            } catch (error) {
+                clearInterval(pipelinePoller);
+                document.getElementById('pipelineMessage').textContent = 'Unable to retrieve pipeline progress. Please refresh the dashboard.';
+            }
+        }, 1000);
+    }
+
+    document.getElementById('addCompanyForm')?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.querySelector('span').textContent = 'Starting…';
+        try {
+            const response = await fetch('/research', { method: 'POST', body: new FormData(form) });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'Could not start the pipeline.');
+            startPipelineProgress(result.company_id);
+        } catch (error) {
+            showNotification(error.message, 'error');
+        } finally {
+            button.disabled = false;
+            button.querySelector('span').textContent = 'Start Research';
+        }
+    });
+
+    document.getElementById('bulkUploadForm')?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const button = form.querySelector('button[type="submit"]');
+        const statusEl = document.getElementById('bulkStatus');
+        button.disabled = true;
+        button.textContent = 'Uploading…';
+        statusEl.textContent = '';
+        try {
+            const response = await fetch('/research-bulk', { method: 'POST', body: new FormData(form) });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'Could not start the bulk pipeline.');
+
+            const total = result.started.length;
+            const skippedNote = result.skipped ? ` (${result.skipped} row(s) skipped — blank or duplicate names)` : '';
+            statusEl.textContent = `Started research for ${total} compan${total === 1 ? 'y' : 'ies'}${skippedNote}. Tracking progress…`;
+            showNotification(`Bulk pipeline started for ${total} compan${total === 1 ? 'y' : 'ies'}.`, 'success');
+            window.bulkStartedCompanies = result.started;
+            localStorage.setItem('bulkResearchBatch', JSON.stringify({companies: result.started, progress: {}}));
+            trackBulkProgress(result.started.map(c => c.company_id), statusEl);
+        } catch (error) {
+            statusEl.textContent = error.message;
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Upload & Run Pipeline';
+            form.reset();
+        }
+    });
+
+    function trackBulkProgress(companyIds, statusEl) {
+        const total = companyIds.length;
+        const storedBatch = JSON.parse(localStorage.getItem('bulkResearchBatch') || 'null');
+        const trackedCompanies = (window.bulkStartedCompanies || storedBatch?.companies || []).filter(c => companyIds.includes(c.company_id));
+        const storedProgress = storedBatch?.progress || {};
+        const progressPanel = document.getElementById('bulkProgressPanel');
+        const countEl = document.getElementById('bulkProgressCount');
+        const barEl = document.getElementById('bulkProgressBar');
+        const companiesEl = document.getElementById('bulkCompanyProgress');
+        progressPanel?.classList.remove('hidden');
+
+        function renderBulkCompany(companyId, progress) {
+            const card = document.getElementById(`bulk-company-${companyId}`);
+            if (!card) return;
+            const state = progress.state || 'running';
+            const isDone = state === 'complete' || state === 'error';
+            card.dataset.state = state;
+            card.querySelector('.bulk-company-stage').textContent = progress.message || progress.stage || 'Processing…';
+            card.querySelector('.bulk-company-bar').style.width = `${progress.percent || 0}%`;
+            const mainCard = document.getElementById(`live-company-${companyId}`);
+            if (mainCard) {
+                mainCard.querySelector('.live-company-status').textContent = progress.message || progress.stage || 'Processing…';
+                mainCard.querySelector('.live-company-bar').style.width = `${progress.percent || 0}%`;
+            }
+            const action = card.querySelector('.bulk-company-action');
+            if (isDone) {
+                action.textContent = state === 'complete' ? 'Open company' : 'View company';
+                action.href = `/company/${companyId}`;
+                action.classList.remove('hidden');
+            }
+        }
+
+        function addBulkCompanyCard(company) {
+            if (!companiesEl || document.getElementById(`bulk-company-${company.company_id}`)) return;
+            const card = document.createElement('div');
+            card.id = `bulk-company-${company.company_id}`;
+            card.className = 'bulk-company-progress rounded-lg border border-outline-variant/25 p-2.5';
+            card.innerHTML = `<div class="flex items-center justify-between gap-2"><span class="font-body-sm text-body-sm text-on-surface"></span><a class="bulk-company-action hidden font-label-md text-label-md text-primary hover:underline" target="_self"></a></div><div class="bulk-company-stage font-body-sm text-body-sm text-on-surface-variant mt-1">Queued</div><div class="progress-track mt-2"><div class="bulk-company-bar progress-bar" style="width:5%;"></div></div>`;
+            card.querySelector('.text-on-surface').textContent = company.company_name;
+            companiesEl?.appendChild(card);
+            addLiveCompanyCard(company);
+        }
+
+        function addLiveCompanyCard(company) {
+            if (document.getElementById(`live-company-${company.company_id}`)
+                || Array.from(document.querySelectorAll('#companyGrid a[href]')).some(link => link.getAttribute('href') === `/company/${company.company_id}`)) return;
+            let grid = document.getElementById('companyGrid');
+            if (!grid) {
+                document.getElementById('emptyState')?.classList.add('hidden');
+                grid = document.createElement('div');
+                grid.id = 'companyGrid';
+                grid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter';
+                document.getElementById('emptyState')?.insertAdjacentElement('afterend', grid);
+            }
+            const card = document.createElement('div');
+            card.id = `live-company-${company.company_id}`;
+            card.className = 'company-card glass-card rounded-xl p-stack-md flex flex-col';
+            card.innerHTML = `<div class="flex items-start justify-between gap-2"><h3 class="font-headline-md text-headline-md text-on-surface"></h3><span class="font-mono-sm text-mono-sm text-secondary/90 uppercase">Bulk</span></div><p class="live-company-status font-body-sm text-body-sm text-on-surface-variant mt-2">Queued</p><div class="progress-track mt-3"><div class="live-company-bar progress-bar" style="width:5%;"></div></div><a class="mt-4 btn-secondary font-label-md text-label-md py-2 rounded-lg flex items-center justify-center" href="/company/${company.company_id}">Open company</a>`;
+            card.querySelector('h3').textContent = company.company_name;
+            grid.appendChild(card);
+        }
+
+        // Show every uploaded company immediately; each card updates independently.
+        trackedCompanies.forEach(addBulkCompanyCard);
+        trackedCompanies.forEach(company => {
+            if (storedProgress[company.company_id]) renderBulkCompany(company.company_id, storedProgress[company.company_id]);
+        });
+        const poller = setInterval(async () => {
+            try {
+                const results = await Promise.all(
+                    companyIds.map(id => fetch(`/research-progress/${id}`).then(r => r.json()).catch(() => ({ state: 'error', message: 'Unable to retrieve progress.' })))
+                );
+                const done = results.filter(r => r.state === 'complete' || r.state === 'error').length;
+                results.forEach((progress, index) => renderBulkCompany(companyIds[index], progress));
+                const batch = JSON.parse(localStorage.getItem('bulkResearchBatch') || 'null') || {companies: trackedCompanies, progress: {}};
+                results.forEach((progress, index) => { batch.progress[companyIds[index]] = progress; });
+                localStorage.setItem('bulkResearchBatch', JSON.stringify(batch));
+                if (countEl) countEl.textContent = `${done} of ${total}`;
+                if (barEl) barEl.style.width = `${total ? (done / total) * 100 : 0}%`;
+                statusEl.textContent = `Bulk pipeline: ${done} of ${total} companies finished…`;
+                if (done >= total) {
+                    clearInterval(poller);
+                    statusEl.textContent = `Bulk pipeline complete: ${total} of ${total} companies finished. Refreshing…`;
+                    // The dashboard now has the final company data; clear the
+                    // resume marker before the one intentional final refresh
+                    // so the refreshed page does not start another reload loop.
+                    localStorage.removeItem('bulkResearchBatch');
+                    setTimeout(() => window.location.reload(), 1200);
+                }
+            } catch (error) {
+                clearInterval(poller);
+                statusEl.textContent = 'Unable to track bulk progress. Please refresh the dashboard.';
+            }
+        }, 1500);
+    }
+
+    // Rebuild the bulk cards after a browser refresh while the batch is running
+    // (or after it has completed). Main company cards are loaded from the database.
+    window.addEventListener('DOMContentLoaded', () => {
+        const batch = JSON.parse(localStorage.getItem('bulkResearchBatch') || 'null');
+        if (!batch?.companies?.length) return;
+        window.bulkStartedCompanies = batch.companies;
+        const panel = document.getElementById('bulkImportPanel');
+        panel?.classList.remove('hidden');
+        const statusEl = document.getElementById('bulkStatus');
+        statusEl.textContent = 'Restored bulk research progress.';
+        trackBulkProgress(batch.companies.map(c => c.company_id), statusEl);
+    });
+
+    // Search + filter tabs
+    let activeFilter = 'all';
+    function applyFilters() {
+        const query = document.getElementById('companySearch')?.value.trim().toLowerCase() || '';
+        let visibleCount = 0;
+        document.querySelectorAll('.company-card').forEach(card => {
+            const matchesSearch = card.dataset.name.includes(query);
+            const matchesFilter = activeFilter === 'all'
+                || (activeFilter === 'researching' && card.dataset.status !== 'scored' && card.dataset.status !== 'failed_research')
+                || (activeFilter === 'scored' && card.dataset.status === 'scored')
+                || (activeFilter === 'tier-a' && card.dataset.tier === 'Tier A')
+                || (activeFilter === 'tier-b' && card.dataset.tier === 'Tier B')
+                || (activeFilter === 'prospect' && card.dataset.stage === 'Prospect');
+            const visible = matchesSearch && matchesFilter;
+            card.style.display = visible ? '' : 'none';
+            if (visible) visibleCount++;
+        });
+        document.getElementById('noResultsMsg')?.classList.toggle('hidden', visibleCount !== 0);
+    }
+    document.getElementById('companySearch')?.addEventListener('input', applyFilters);
+    document.querySelectorAll('.filter-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.filter-tab').forEach(t => {
+                t.classList.remove('text-primary', 'border-b-2', 'border-primary');
+                t.classList.add('text-on-surface-variant');
+            });
+            tab.classList.add('text-primary', 'border-b-2', 'border-primary');
+            tab.classList.remove('text-on-surface-variant');
+            activeFilter = tab.dataset.filter;
+            applyFilters();
+        });
+    });
+
+    // Sort
+    document.getElementById('sortSelect')?.addEventListener('change', function () {
+        const grid = document.getElementById('companyGrid');
+        if (!grid) return;
+        const cards = Array.from(grid.querySelectorAll('.company-card'));
+        const mode = this.value;
+        cards.sort((a, b) => {
+            if (mode === 'score-desc') return parseFloat(b.dataset.score) - parseFloat(a.dataset.score);
+            if (mode === 'score-asc') return parseFloat(a.dataset.score) - parseFloat(b.dataset.score);
+            if (mode === 'name') return a.dataset.name.localeCompare(b.dataset.name);
+            if (mode === 'newest') return (b.dataset.created || '').localeCompare(a.dataset.created || '');
+            return 0;
+        });
+        cards.forEach(card => grid.appendChild(card));
+    });
+
+    // Bulk select + upload to Zoho
+    let zohoSelectMode = false;
+
+    function toggleZohoSelectMode() {
+        zohoSelectMode = !zohoSelectMode;
+        // only one select mode at a time (their checkboxes share the same corner)
+        if (zohoSelectMode && deleteSelectMode) toggleDeleteSelectMode();
+        document.querySelectorAll('.zoho-select-checkbox').forEach(el => el.classList.toggle('hidden', !zohoSelectMode));
+        document.getElementById('zohoSelectBar').classList.toggle('hidden', !zohoSelectMode);
+        if (!zohoSelectMode) {
+            document.querySelectorAll('.zoho-select-input').forEach(cb => cb.checked = false);
+            updateZohoSelection();
+        }
+    }
+
+    // Bulk select + delete (works on any company, not just approved ones)
+    let deleteSelectMode = false;
+    let emailSelectMode = false;
+
+    function toggleEmailSelectMode() {
+        emailSelectMode = !emailSelectMode;
+        if (emailSelectMode && (deleteSelectMode || zohoSelectMode)) {
+            if (deleteSelectMode) toggleDeleteSelectMode();
+            if (zohoSelectMode) toggleZohoSelectMode();
+        }
+        document.querySelectorAll('.email-select-checkbox').forEach(el => el.classList.toggle('hidden', !emailSelectMode));
+        document.getElementById('emailSelectBar').classList.toggle('hidden', !emailSelectMode);
+        if (!emailSelectMode) {
+            document.querySelectorAll('.email-select-input').forEach(cb => cb.checked = false);
+            updateEmailSelection();
+        }
+    }
+
+    function getSelectedEmailIds() {
+        return Array.from(document.querySelectorAll('.email-select-input:checked')).map(cb => cb.dataset.id);
+    }
+
+    function updateEmailSelection() {
+        const count = getSelectedEmailIds().length;
+        document.getElementById('emailSelectedCount').textContent = count;
+        document.getElementById('emailSelectedBtn').disabled = count === 0;
+    }
+
+    async function sendBulkResearchEmail() {
+        const ids = getSelectedEmailIds();
+        if (!ids.length) return;
+        const recipientEmail = prompt('Send the combined Excel file to which email address?');
+        if (!recipientEmail) return;
+        const recipientName = prompt('Recipient name (optional):') || '';
+        const btn = document.getElementById('emailSelectedBtn');
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+        try {
+            const response = await fetch('/email-research-bulk', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({company_ids: ids, recipient_email: recipientEmail, recipient_name: recipientName})
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Could not send the combined Excel file.');
+            showNotification(data.message, 'success');
+            toggleEmailSelectMode();
+        } catch (error) {
+            alert(error.message);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '✉ Email Combined Excel';
+            updateEmailSelection();
+        }
+    }
+
+    function toggleDeleteSelectMode() {
+        deleteSelectMode = !deleteSelectMode;
+        if (deleteSelectMode && zohoSelectMode) toggleZohoSelectMode();
+        document.querySelectorAll('.del-select-checkbox').forEach(el => el.classList.toggle('hidden', !deleteSelectMode));
+        document.getElementById('deleteSelectBar').classList.toggle('hidden', !deleteSelectMode);
+        if (!deleteSelectMode) {
+            document.querySelectorAll('.del-select-input').forEach(cb => cb.checked = false);
+            updateDeleteSelection();
+        }
+    }
+
+    function getSelectedDeleteIds() {
+        return Array.from(document.querySelectorAll('.del-select-input:checked')).map(cb => cb.dataset.id);
+    }
+
+    function updateDeleteSelection() {
+        const count = getSelectedDeleteIds().length;
+        document.getElementById('deleteSelectedCount').textContent = count;
+        document.getElementById('deleteSelectedBtn').disabled = count === 0;
+    }
+
+    function startBulkDelete() {
+        const checked = Array.from(document.querySelectorAll('.del-select-input:checked'));
+        const ids = checked.map(cb => cb.dataset.id);
+        if (!ids.length) return;
+
+        const names = checked.map(cb => cb.dataset.name);
+        const preview = names.slice(0, 10).join('\n') + (names.length > 10 ? `\n…and ${names.length - 10} more` : '');
+        const confirmMsg = `Delete ${ids.length} compan${ids.length === 1 ? 'y' : 'ies'}? This cannot be undone.\n\n${preview}`;
+        if (!confirm(confirmMsg)) return;
+
+        const btn = document.getElementById('deleteSelectedBtn');
+        btn.disabled = true;
+        btn.textContent = 'Deleting…';
+
+        fetch('/delete-bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_ids: ids })
+        })
+            .then(r => r.json().then(data => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok) throw new Error(data.message || 'Could not delete the selected companies.');
+                location.reload();
+            })
+            .catch(error => {
+                alert(error.message);
+                btn.disabled = false;
+                btn.textContent = '🗑 Delete Selected';
+            });
+    }
+
+    function getSelectedZohoIds() {
+        return Array.from(document.querySelectorAll('.zoho-select-input:checked')).map(cb => cb.dataset.id);
+    }
+
+    function updateZohoSelection() {
+        const count = getSelectedZohoIds().length;
+        document.getElementById('zohoSelectedCount').textContent = count;
+        document.getElementById('zohoUploadBtn').disabled = count === 0;
+    }
+
+    let zohoBulkPoller = null;
+
+    function startBulkZohoUpload() {
+        const ids = getSelectedZohoIds();
+        if (!ids.length) return;
+
+        const btn = document.getElementById('zohoUploadBtn');
+        btn.disabled = true;
+        document.getElementById('zohoBulkResults').innerHTML = '';
+        document.getElementById('zohoBulkCloseBtn').style.display = 'none';
+        document.getElementById('zohoBulkBar').style.width = '0%';
+        document.getElementById('zohoBulkMessage').textContent = `Starting upload for ${ids.length} compan${ids.length === 1 ? 'y' : 'ies'}…`;
+        document.getElementById('zohoBulkModal').style.display = 'flex';
+
+        fetch('/upload-crm-bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_ids: ids })
+        })
+            .then(r => r.json().then(data => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok) throw new Error(data.message || 'Could not start the Zoho upload.');
+                pollBulkZohoProgress(data.job_id, data.total);
+            })
+            .catch(error => {
+                document.getElementById('zohoBulkMessage').textContent = error.message;
+                document.getElementById('zohoBulkCloseBtn').style.display = 'inline-block';
+                btn.disabled = false;
+            });
+    }
+
+    function pollBulkZohoProgress(jobId, total) {
+        const resultsEl = document.getElementById('zohoBulkResults');
+        const seen = new Set();
+        zohoBulkPoller = setInterval(async () => {
+            try {
+                const response = await fetch(`/upload-crm-bulk-progress/${jobId}`);
+                const job = await response.json();
+                if (!response.ok) throw new Error(job.message || 'Unable to fetch upload progress.');
+
+                const percent = total ? Math.round((job.completed / total) * 100) : 0;
+                document.getElementById('zohoBulkBar').style.width = `${percent}%`;
+                document.getElementById('zohoBulkMessage').textContent =
+                    `${job.completed} of ${job.total} processed — ${job.succeeded} uploaded, ${job.failed} failed`;
+
+                job.results.forEach(r => {
+                    if (seen.has(r.company_id)) return;
+                    seen.add(r.company_id);
+                    const ok = r.status === 'success' || r.status === 'simulated';
+                    const row = document.createElement('div');
+                    row.style.cssText = 'padding:4px 0; display:flex; justify-content:space-between; gap:8px;';
+                    row.innerHTML = `<span>${ok ? '✓' : '✗'} ${r.company_name}</span><span style="color:${ok ? '#4ade80' : '#fca5a5'};">${ok ? 'Uploaded' : (r.message || 'Failed')}</span>`;
+                    resultsEl.appendChild(row);
+                });
+
+                if (job.state === 'complete') {
+                    clearInterval(zohoBulkPoller);
+                    document.getElementById('zohoBulkCloseBtn').style.display = 'inline-block';
+                    showNotification(`Zoho upload complete: ${job.succeeded} uploaded, ${job.failed} failed.`, job.failed ? 'error' : 'success');
+                }
+            } catch (error) {
+                clearInterval(zohoBulkPoller);
+                document.getElementById('zohoBulkMessage').textContent = 'Unable to track upload progress. Please refresh the dashboard.';
+                document.getElementById('zohoBulkCloseBtn').style.display = 'inline-block';
+            }
+        }, 1200);
+    }
+
+    function closeZohoBulkModal() {
+        if (zohoBulkPoller) clearInterval(zohoBulkPoller);
+        document.getElementById('zohoBulkModal').style.display = 'none';
+        window.location.reload();
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "_headtags.html" %}
+<title>{% block title %}DonorIQ{% endblock %}</title>
+</head>
+<body class="antialiased overflow-x-hidden min-h-screen flex">
+<div class="sidebar-scrim fixed inset-0 bg-black/60 z-30 hidden" id="sidebarScrim"></div>
+
+<nav class="fixed left-0 top-0 h-full flex-col pt-8 bg-surface-container-lowest border-r border-outline-variant/20 w-[280px] z-40 transition-transform duration-300 -translate-x-full md:translate-x-0 flex" id="sidebar">
+    <div class="px-gutter mb-stack-lg">
+        <h1 class="font-headline-md text-headline-md font-bold text-primary">DonorIQ</h1>
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mt-1">Intelligence Layer</p>
+    </div>
+    <ul class="flex flex-col gap-2 px-stack-md flex-grow">
+        <li>
+            <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 {% if active_nav == 'dashboard' %}bg-primary-container/20 text-primary border-r-4 border-primary{% else %}text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1{% endif %}" href="/">
+                <span class="material-symbols-outlined" {% if active_nav == 'dashboard' %}style="font-variation-settings: 'FILL' 1;"{% endif %}>dashboard</span>
+                <span class="font-label-md text-label-md">Dashboard</span>
+            </a>
+        <li>
+            <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 {% if active_nav == 'settings_search' %}bg-primary-container/20 text-primary border-r-4 border-primary{% else %}text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1{% endif %}" href="/settings/search">
+                <span class="material-symbols-outlined" {% if active_nav == 'settings_search' %}style="font-variation-settings: 'FILL' 1;"{% endif %}>travel_explore</span>
+                <span class="font-label-md text-label-md">Search API Keys</span>
+            </a>
+        </li>
+        <li>
+            <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 {% if active_nav in ['settings', 'settings_zoho'] %}bg-primary-container/20 text-primary border-r-4 border-primary{% else %}text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1{% endif %}" href="/settings/zoho">
+                <span class="material-symbols-outlined" {% if active_nav in ['settings', 'settings_zoho'] %}style="font-variation-settings: 'FILL' 1;"{% endif %}>settings</span>
+                <span class="font-label-md text-label-md">Zoho Settings</span>
+            </a>
+        </li>
+        {% if role == 'admin' %}
+        <li>
+            <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 {% if active_nav == 'admin' %}bg-primary-container/20 text-primary border-r-4 border-primary{% else %}text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1{% endif %}" href="/admin">
+                <span class="material-symbols-outlined" {% if active_nav == 'admin' %}style="font-variation-settings: 'FILL' 1;"{% endif %}>admin_panel_settings</span>
+                <span class="font-label-md text-label-md">Admin Panel</span>
+            </a>
+        </li>
+        {% endif %}
+    </ul>
+    <div class="mt-auto p-stack-md border-t border-outline-variant/20">
+        {% if impersonating %}
+        <a href="/admin/stop-impersonating" class="flex items-center gap-3 px-4 py-2 rounded-lg text-error hover:bg-error/10 transition-all duration-200 mb-1">
+            <span class="material-symbols-outlined text-[18px]">switch_account</span>
+            <span class="font-label-md text-label-md">Stop impersonating</span>
+        </a>
+        {% endif %}
+        {% if username %}
+        <div class="flex items-center gap-3 px-4 py-2 text-on-surface-variant">
+            <div class="w-7 h-7 rounded-full bg-primary-container/40 flex items-center justify-center font-label-md text-label-md text-primary shrink-0">
+                {{ username[:2] | upper }}
+            </div>
+            <span class="font-body-sm text-body-sm truncate">{{ username }}</span>
+        </div>
+        {% endif %}
+        <a href="/logout" class="flex items-center gap-3 px-4 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 transition-all duration-200">
+            <span class="material-symbols-outlined text-[18px]">logout</span>
+            <span class="font-label-md text-label-md">Logout</span>
+        </a>
+    </div>
+</nav>
+
+<main class="flex-1 md:ml-[280px] flex flex-col min-h-screen relative">
+    <header class="md:hidden fixed top-0 w-full z-50 flex justify-between items-center px-gutter h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/30">
+        <button class="text-on-surface" id="sidebarToggle" aria-label="Toggle navigation">
+            <span class="material-symbols-outlined">menu</span>
+        </button>
+        <div class="font-headline-md text-headline-md font-bold text-primary">DonorIQ</div>
+        <div class="w-6"></div>
+    </header>
+
+    <div class="flex-1 p-margin-mobile md:p-margin-desktop mt-16 md:mt-0 pt-stack-lg max-w-container-max mx-auto w-full">
+        <div class="mb-stack-lg flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+                {% block page_kicker %}{% endblock %}
+                <h2 class="font-headline-lg text-headline-lg text-on-surface mb-2">{% block page_title %}{% endblock %}</h2>
+                <p class="font-body-md text-body-md text-on-surface-variant">{% block page_subtitle %}{% endblock %}</p>
+            </div>
+            <div>{% block header_actions %}{% endblock %}</div>
+        </div>
+
+        {% block content %}{% endblock %}
+    </div>
+</main>
+
+<script>
+    function setSidebarOpen(open) {
+        document.getElementById('sidebar').classList.toggle('-translate-x-full', !open);
+        document.getElementById('sidebar').classList.toggle('translate-x-0', open);
+        document.getElementById('sidebarScrim').classList.toggle('hidden', !open);
+    }
+    document.getElementById('sidebarToggle')?.addEventListener('click', () => setSidebarOpen(true));
+    document.getElementById('sidebarScrim')?.addEventListener('click', () => setSidebarOpen(false));
+    document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', () => setSidebarOpen(false)));
+
+    function showNotification(message, type = 'info') {
+        const notification = document.createElement('div');
+        const bg = type === 'success' ? 'rgba(16, 185, 129, 0.95)' : (type === 'info' ? 'rgba(96, 91, 255, 0.95)' : 'rgba(244, 63, 94, 0.95)');
+        notification.className = 'font-body-sm text-body-sm';
+        notification.textContent = message;
+        notification.style.cssText = `
+            position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem; border-radius: 8px;
+            background: ${bg}; color: white; font-weight: 600; z-index: 9999; max-width: 360px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4); animation: toastSlideIn 0.3s ease;
+        `;
+        document.body.appendChild(notification);
+        setTimeout(() => {
+            notification.style.animation = 'toastSlideOut 0.3s ease';
+            setTimeout(() => notification.remove(), 300);
+        }, 3000);
+    }
+</script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

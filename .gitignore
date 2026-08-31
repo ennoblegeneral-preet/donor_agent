@@ -1,0 +1,45 @@
+# Environment variables & secrets (CRITICAL)
+.env
+.env.*
+!.env.example
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Application generated files & logs
+logs/
+*.log
+uploads/
+scratch/
+*.pdf
+*.xlsx
+*.csv
+*_SUMMARY.txt
+
+
+# Local docs, screenshots & design drafts (optional local files)
+*.docx
+*.png
+*.jpg
+*.jpeg
+*.svg
+stitch_donoriq_ai_crm_frontend/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+.agents/

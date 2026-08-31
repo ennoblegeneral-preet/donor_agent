@@ -1,0 +1,945 @@
+{% extends "base_app.html" %}
+{% set active_nav = 'dashboard' %}
+{% set research = c.get('research_json') or {} %}
+{% set contact = research.get('contact', {}) or {} %}
+{% set contacts = c.get('contacts_json') or {} %}
+{% set crm = c.get('crm') or {} %}
+{% set ring_color = 'text-tertiary' if c.get('tier') == 'Tier A' else ('text-primary' if c.get('tier') == 'Tier B' else ('text-amber-500' if c.get('tier') in ['Tier C', 'Nurture', 'Medium', 'Medium Fit'] else 'text-on-surface-variant')) %}
+
+{% block title %}{{ c.company_name }} - DonorIQ{% endblock %}
+{% block page_kicker %}
+<a href="/" class="inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors mb-2">
+    <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+    Back to Dashboard
+</a>
+<p class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-1">{{ research.get('industry', 'Sector unknown') }}</p>
+{% endblock %}
+{% block page_title %}{{ c.company_name }}{% endblock %}
+{% block page_subtitle %}{% if c.website %}<a href="{{ c.website }}" target="_blank" class="hover:text-primary transition-colors">{{ c.website }}</a>{% endif %}{% endblock %}
+
+{% block header_actions %}
+{% if c.get('score') is not none %}
+<div class="glass-card rounded-xl p-stack-md flex items-center gap-4">
+    <div>
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1">CSR Prospect Tier</p>
+        <p class="font-headline-md text-headline-md {{ ring_color }} flex items-center gap-1">
+            <span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">workspace_premium</span>
+            {{ c.get('tier', '-') }}
+        </p>
+    </div>
+    <div class="relative w-16 h-16 flex items-center justify-center shrink-0">
+        <svg class="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+            <path class="{{ ring_color }}/10" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3"></path>
+            <path class="{{ ring_color }} progress-ring__circle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="100, 100" stroke-dashoffset="{{ 100 - c.get('score', 0) }}" stroke-linecap="round" stroke-width="3"></path>
+        </svg>
+        <span class="absolute font-label-md text-label-md text-on-surface">{{ c.get('score') }}</span>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% if c.get('pipeline_warnings') %}
+<div class="glass-card rounded-xl p-stack-md mb-stack-lg" style="border-color: rgba(249,115,22,0.35); background: rgba(249,115,22,0.08);">
+    <p class="font-label-md text-label-md mb-2" style="color: #f97316;">
+        ⚠ Pipeline completed with {{ c.pipeline_warnings | length }} issue{{ 's' if c.pipeline_warnings | length != 1 else '' }} - data below may be incomplete
+    </p>
+    <ul class="font-body-sm text-body-sm text-on-surface-variant" style="list-style: disc; padding-left: 1.25rem;">
+        {% for w in c.pipeline_warnings %}
+        <li><strong style="color:#fdba74;">{{ w.stage }}:</strong> {{ w.message }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-gutter mb-stack-lg">
+    {% if c.get('tier') == 'Tier C' %}
+    <div class="glass-card rounded-xl p-stack-md">
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1">Approval</p>
+        <span class="approval-badge approval-{{ c.approval_status }}">{{ c.approval_status | upper }}</span>
+    </div>
+    {% endif %}
+    <div class="glass-card rounded-xl p-stack-md">
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1">Compliance</p>
+        <p class="font-body-md text-body-md text-on-surface">{% if c.get('compliance_blocked') %}🚫 Blocked{% else %}✓ Verified{% endif %}</p>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md">
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1">CRM Upload</p>
+        <span class="badge-crm badge-{{ c.upload_status }}" style="display:inline-block; padding:0.28rem 0.6rem; border-radius:8px; font-size:0.75rem; font-weight:600; {% if c.upload_status == 'uploaded' %}background: var(--green-bg); color: var(--green);{% else %}background: rgba(255,255,255,0.05); color: var(--text-secondary);{% endif %}">{{ c.upload_status }}</span>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md">
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1">Record Stage</p>
+        <p class="font-body-md text-body-md text-on-surface">{{ c.get('record_stage', 'New') }}</p>
+    </div>
+    {% set token_usage = c.get('token_usage_estimate') %}
+    {% if token_usage %}
+    <div class="glass-card rounded-xl p-stack-md">
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1">Tokens Used (research run)</p>
+        <p class="font-body-md text-body-md text-on-surface">{{ token_usage.total_tokens | commas }}
+            <span style="font-size:11px; color:#94a3b8;">({{ token_usage.prompt_tokens | commas }} in / {{ token_usage.completion_tokens | commas }} out, {{ token_usage.calls }} calls)</span>
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Company Research -->
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Company Research</h2>
+    <div class="detail-section" style="background:transparent; border:none; padding:0; backdrop-filter:none;">
+        <div class="detail-fields" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem;">
+            <div class="detail-field">
+                <strong>Industry:</strong>
+                <span>{{ research.get('industry', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>City:</strong>
+                <span>{{ research.get('city', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>State:</strong>
+                <span>{{ research.get('state', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>CSR Themes:</strong>
+                <span>{{ (research.get('thematic_focus', []) | join(', ')) or '-' if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Geography:</strong>
+                <span>{{ research.get('geographical_priority', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>CSR Focus:</strong>
+                <span>{{ research.get('company_csr_focus', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Past CSR Programs:</strong>
+                <span>{{ research.get('previous_education_projects', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Avg Ticket Size:</strong>
+                <span>{{ research.get('avg_ticket_size', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Program District/State:</strong>
+                <span>{{ research.get('program_district_state', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Education CSR Spend:</strong>
+                <span>{{ research.get('education_csr_spend', '-') if research else '-' }}</span>
+            </div>
+            {% set partners_list = (csr_data.get('implementation_partners') if csr_data else []) or (research.get('existing_implementation_partners') if research else []) or [] %}
+            <div class="detail-field">
+                <strong>Implementation Partners (NGOs):</strong>
+                <span>{{ (partners_list | join(', ')) or '-' }}</span>
+            </div>
+            {% set comm_list = (csr_data.get('committee_members') if csr_data else []) or (c.get('committee_members') or []) %}
+            {% set committee_linkedin = c.get('committee_members_linkedin') or (c.get('csr_data') or {}).get('committee_members_linkedin') or {} %}
+            {% set committee_linkedin_lookup = c.get('_committee_members_linkedin_lookup') or {} %}
+            <div class="detail-field">
+                <strong>CSR Committee Members:</strong>
+                <span>
+                    {% if comm_list %}
+                        {% for member in comm_list %}
+                            {% set li_url = committee_linkedin_lookup.get(member|string|trim|lower) %}
+                            {% if li_url %}
+                                <a href="{{ li_url }}" target="_blank" rel="noopener noreferrer" class="source-link" style="display:inline-flex; align-items:center; gap:2px;">{{ member }} 🔗</a>{% if not loop.last %}, {% endif %}
+                            {% else %}
+                                {{ member }}{% if not loop.last %}, {% endif %}
+                            {% endif %}
+                        {% endfor %}
+                    {% else %}
+                        -
+                    {% endif %}
+                </span>
+            </div>
+            <div class="detail-field full-width">
+                <strong>Source URL:</strong>
+                {% set source_urls = (research.get('source_url', '') if research else '').split(';') %}
+                {% set valid_urls = [] %}
+                {% for u in source_urls %}
+                    {% set u = u.strip() %}
+                    {% if u and u != 'Not Found' and 'http' in u %}
+                        {% set _ = valid_urls.append(u) %}
+                    {% endif %}
+                {% endfor %}
+                {% if valid_urls %}
+                    {% for u in valid_urls %}
+                    <a href="{{ u }}" target="_blank" class="source-link">{{ u | source_name }}</a>{% if not loop.last %}<span> · </span>{% endif %}
+                    {% endfor %}
+                {% else %}
+                <span>-</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Dedicated Education Fitment Research -->
+{% set education_evidence = c.get('education_fitment_evidence') or {} %}
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Education Fitment Research</h2>
+    <p class="font-body-sm text-body-sm text-on-surface-variant" style="margin-bottom: 16px;">
+        These six fields come from the dedicated education search pass. Evidence and source links are stored separately from the final research values.
+    </p>
+    <div class="detail-fields" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem;">
+        {% set education_fields = [
+            ('csr_stem_education', 'STEM Education'),
+            ('csr_school_infra_transformation', 'School Infrastructure Transformation'),
+            ('csr_holistic_transformation', 'Holistic School Transformation'),
+            ('csr_anganwadi_transformation', 'Anganwadi Transformation'),
+            ('csr_quality_education', 'Quality Education'),
+            ('csr_model_school_transformation', 'Model School Transformation')
+        ] %}
+        {% for field, label in education_fields %}
+        {% set evidence = education_evidence.get(field, {}) or {} %}
+        <div class="detail-field" style="padding: 12px; border: 1px solid rgba(255,255,255,0.10); border-radius: 8px;">
+            <strong>{{ label }}:</strong>
+            <div style="margin-top: 6px; color: #f1f5f9;">{{ research.get(field, 'Not Found') }}</div>
+            {% if evidence.get('status') %}
+            {% set normalized_value = research.get(field, 'Not Found') | string | lower | trim %}
+            {% set display_status = 'found' if normalized_value in ['yes', 'no'] else evidence.get('status') %}
+            <div style="margin-top: 5px; font-size: 11px; color: #94a3b8;">
+                Status: {{ display_status }} · {{ evidence.get('sources_checked', 0) }} sources checked
+            </div>
+            {% endif %}
+            {% if evidence.get('evidence') %}
+            <div style="margin-top: 7px; font-size: 12px; color: #cbd5e1;">{{ evidence.get('evidence') }}</div>
+            {% endif %}
+            {% if evidence.get('sources') %}
+            <div style="margin-top: 7px; font-size: 11px;">
+                <span style="color:#94a3b8; margin-right:6px;">Supporting sources:</span>
+                {% for source in evidence.get('sources') %}
+                {% if source is string %}
+                    {% set source_url = source %}
+                    {% set source_label = source | source_name %}
+                {% else %}
+                    {% set source_url = source.get('url') %}
+                    {% set source_label = source.get('title') or (source_url | source_name) %}
+                {% endif %}
+                <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer" class="source-link">{{ source_label }}</a>{% if not loop.last %} · {% endif %}
+                {% endfor %}
+            </div>
+            {% elif evidence.get('checked_sources') %}
+            <div style="margin-top: 7px; font-size: 11px;">
+                <span style="color:#94a3b8; margin-right:6px;">Sources checked:</span>
+                {% for source in evidence.get('checked_sources') %}
+                {% set source_url = source.get('url') if source is mapping else source %}
+                {% set source_label = (source.get('title') or (source_url | source_name)) if source is mapping else (source | source_name) %}
+                <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer" class="source-link">{{ source_label }}</a>{% if not loop.last %} · {% endif %}
+                {% endfor %}
+                <div style="margin-top:4px; color:#94a3b8;">The extractor did not identify a specific supporting source.</div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Financial Data -->
+{% set financial_data = c.get('financial_data') or {} %}
+{% if financial_data and (financial_data.get('turnover') or financial_data.get('pbt')) %}
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom: 16px;">
+        <h2 class="font-headline-md text-headline-md text-on-surface">💰 Financial Data</h2>
+        {% if c.get('screener_url') %}
+        <span style="font-size: 12px; color: #94a3b8;">
+            Source: <a href="{{ c.get('screener_url') }}" target="_blank" rel="noopener noreferrer" class="source-link">📊 Screener.in ↗</a>
+        </span>
+        {% endif %}
+    </div>
+
+    {% set is_prospect = c.get('is_prospect') %}
+    <div style="margin-bottom: 16px; padding: 8px 12px; border-radius: 8px; {% if is_prospect %}background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.35);{% else %}background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.35);{% endif %}">
+        <span style="font-weight:600; {% if is_prospect %}color:#22c55e;{% else %}color:#ef4444;{% endif %}">
+            🎯 Prospect Status: <strong>{% if is_prospect %}✅ YES - Meets Criteria{% else %}❌ NO - Does Not Meet Criteria{% endif %}</strong>
+        </span>
+    </div>
+
+    {% set fiscal_years = financial_data.get('fiscal_years', []) %}
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+        <div style="background: rgba(59, 130, 246, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.2);">
+            <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Annual Turnover (₹ Cr)</div>
+            {% for fy in fiscal_years %}
+            <div><span style="font-size: 13px; color: #cbd5e1;">{{ fy }}:</span> <span style="font-weight: 600; color: #f1f5f9;">{{ financial_data.get('turnover', {}).get(fy, '-') | commas }}</span></div>
+            {% endfor %}
+        </div>
+        <div style="background: rgba(168, 85, 247, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(168, 85, 247, 0.2);">
+            <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">PBT (₹ Cr)</div>
+            {% for fy in fiscal_years %}
+            <div><span style="font-size: 13px; color: #cbd5e1;">{{ fy }}:</span> <span style="font-weight: 600; color: #f1f5f9;">{{ financial_data.get('pbt', {}).get(fy, '-') | commas }}</span></div>
+            {% endfor %}
+        </div>
+        <div style="background: rgba(34, 197, 94, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(34, 197, 94, 0.2);">
+            <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Net Profit (₹ Cr)</div>
+            {% for fy in fiscal_years %}
+            <div><span style="font-size: 13px; color: #cbd5e1;">{{ fy }}:</span> <span style="font-weight: 600; color: #f1f5f9;">{{ financial_data.get('net_profit', {}).get(fy, '-') | commas }}</span></div>
+            {% endfor %}
+        </div>
+        <div style="background: rgba(245, 158, 11, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.2);">
+            <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Net Worth (₹ Cr)</div>
+            {% for fy in fiscal_years %}
+            <div><span style="font-size: 13px; color: #cbd5e1;">{{ fy }}:</span> <span style="font-weight: 600; color: #f1f5f9;">{{ financial_data.get('net_worth', {}).get(fy, '-') | commas }}</span></div>
+            {% endfor %}
+        </div>
+        {% set csr_data = c.get('csr_data') or {} %}
+        <div style="background: rgba(236, 72, 153, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(236, 72, 153, 0.2);">
+            <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">Annual CSR Spend (₹ Cr){% if csr_data.get('csr_spend_year') %} &middot; {{ csr_data.get('csr_spend_year') }}{% endif %}</div>
+            <div style="font-weight: 600; color: #f1f5f9; font-size: 14px;">{{ csr_data.get('csr_spend', '-') | commas }}</div>
+        </div>
+        <div style="background: rgba(239, 68, 68, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.2);">
+            <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">CSR Unspent Amount (₹ Cr)</div>
+            <div style="font-weight: 600; color: #f1f5f9; font-size: 14px;">{{ csr_data.get('csr_unspent_amount', '-') | commas }}</div>
+        </div>
+    </div>
+
+    {% set csr_spend_history = csr_data.get('csr_spend_history') or {} %}
+    {% if csr_spend_history %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">CSR Spend - Previous Years (₹ Cr):</div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px;">
+            {% for fy, amount in csr_spend_history.items() %}
+            <div style="background: rgba(148,163,184,0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15); text-align:center;">
+                <div style="font-size: 11px; color: #94a3b8;">{{ fy }}</div>
+                <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹{{ amount | commas }} Cr</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if csr_data %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">CSR Focus Areas:</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
+            {% for area in (csr_data.get('focus_areas') or []) %}
+            <span style="background: rgba(59, 130, 246, 0.2); color: #38bdf8; padding: 4px 10px; border-radius: 4px; font-size: 12px;">{{ area }}</span>
+            {% endfor %}
+        </div>
+        {% set display_partners = (csr_data.get('implementation_partners') if csr_data else []) or (research.get('existing_implementation_partners') if research else []) or [] %}
+        {% if display_partners %}
+        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">Implementation Partners (NGOs):</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">
+            {% for partner in display_partners[:10] %}
+            <span style="background: rgba(168, 85, 247, 0.2); color: #d8b4fe; padding: 4px 10px; border-radius: 4px; font-size: 12px;">{{ partner }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% set display_committee = (csr_data.get('committee_members') if csr_data else []) or (c.get('committee_members') or []) %}
+        {% if display_committee %}
+        {% set committee_linkedin = c.get('committee_members_linkedin') or (c.get('csr_data') or {}).get('committee_members_linkedin') or {} %}
+        {% set committee_linkedin_lookup = c.get('_committee_members_linkedin_lookup') or {} %}
+        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">
+            CSR Committee Members:
+            {% if committee_linkedin %}<span style="font-weight:400; font-style:italic;">(LinkedIn links are unverified name matches - confirm before using)</span>{% endif %}
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            {% for member in display_committee %}
+                {% set li_url = committee_linkedin_lookup.get(member|string|trim|lower) %}
+                {% if li_url %}
+                <a href="{{ li_url }}" target="_blank" rel="noopener noreferrer" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; padding: 4px 10px; border-radius: 4px; font-size: 12px; text-decoration:none; display:inline-flex; align-items:center; gap:4px;">{{ member }}<span style="font-size:10px;">🔗</span></a>
+                {% else %}
+                <span style="background: rgba(34, 197, 94, 0.15); color: #4ade80; padding: 4px 10px; border-radius: 4px; font-size: 12px;">{{ member }}</span>
+                {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% set csr_budget = c.get('csr_budget') or {} %}
+    {% if csr_budget.get('csr_budget_2pct') is not none %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="font-size: 12px; color: #38bdf8; font-weight: 700; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.04em;">📐 CSR Budget Calculation</div>
+        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">
+            Current year <strong style="color:#cbd5e1;">{{ csr_budget.get('excluded_year') }}</strong> excluded &middot; average PBT of the previous 3 years &times; 2% (Companies Act CSR formula)
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px;">
+            {% for fy in csr_budget.get('calc_years', []) %}
+            <div style="background: rgba(148,163,184,0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15); text-align:center;">
+                <div style="font-size: 11px; color: #94a3b8;">{{ fy }} PBT</div>
+                <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹{{ csr_budget.get('pbt_values', {}).get(fy, '-') | commas }} Cr</div>
+            </div>
+            {% endfor %}
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div style="background: rgba(56, 189, 248, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
+                <span style="font-size: 12px; color: #94a3b8;">Average PBT (3 yrs):</span>
+                <strong style="color:#38bdf8; margin-left:6px;">₹{{ csr_budget.get('average_pbt') | commas }} Cr</strong>
+            </div>
+            <span style="color:#64748b;">&times; 2% =</span>
+            <div style="background: rgba(34, 197, 94, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(34, 197, 94, 0.35);">
+                <span style="font-size: 12px; color: #94a3b8;">CSR Budget:</span>
+                <strong style="color:#22c55e; margin-left:6px; font-size: 14px;">₹{{ csr_budget.get('csr_budget_2pct') | commas }} Cr</strong>
+            </div>
+        </div>
+    </div>
+    {% elif csr_budget.get('note') %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: #94a3b8;">
+        📐 CSR Budget Calculation: {{ csr_budget.get('note') }}
+    </div>
+    {% endif %}
+
+    {% set csr_budget_np = c.get('csr_budget_net_profit') or {} %}
+    {% if csr_budget_np.get('csr_budget_2pct_net_profit') is not none %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="font-size: 12px; color: #38bdf8; font-weight: 700; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.04em;">📐 CSR Budget Calculation (Net Profit basis)</div>
+        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">
+            Current year <strong style="color:#cbd5e1;">{{ csr_budget_np.get('excluded_year') }}</strong> excluded &middot; average Net Profit of the previous 3 years &times; 2% (Companies Act CSR formula)
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px;">
+            {% for fy in csr_budget_np.get('calc_years', []) %}
+            <div style="background: rgba(148,163,184,0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15); text-align:center;">
+                <div style="font-size: 11px; color: #94a3b8;">{{ fy }} Net Profit</div>
+                <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹{{ csr_budget_np.get('net_profit_values', {}).get(fy, '-') | commas }} Cr</div>
+            </div>
+            {% endfor %}
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div style="background: rgba(56, 189, 248, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
+                <span style="font-size: 12px; color: #94a3b8;">Average Net Profit (3 yrs):</span>
+                <strong style="color:#38bdf8; margin-left:6px;">₹{{ csr_budget_np.get('average_net_profit') | commas }} Cr</strong>
+            </div>
+            <span style="color:#64748b;">&times; 2% =</span>
+            <div style="background: rgba(34, 197, 94, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(34, 197, 94, 0.35);">
+                <span style="font-size: 12px; color: #94a3b8;">CSR Budget:</span>
+                <strong style="color:#22c55e; margin-left:6px; font-size: 14px;">₹{{ csr_budget_np.get('csr_budget_2pct_net_profit') | commas }} Cr</strong>
+            </div>
+        </div>
+    </div>
+    {% elif csr_budget_np.get('note') %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: #94a3b8;">
+        📐 CSR Budget Calculation (Net Profit basis): {{ csr_budget_np.get('note') }}
+    </div>
+    {% endif %}
+
+    {% set education_spend = c.get('education_spend') or {} %}
+    {% set edu_breakdown = education_spend.get('previous_years_breakdown') or {} %}
+    {% if education_spend.get('current_education_percentage') is not none or education_spend.get('current_education_spend') is not none or edu_breakdown %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="font-size: 12px; color: #38bdf8; font-weight: 700; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.04em;">🎓 Education CSR Spend</div>
+        {% if education_spend.get('current_year') %}
+        <div style="font-size: 12px; color: #94a3b8; margin-bottom: 10px;">
+            Latest reported year: <strong style="color:#cbd5e1;">{{ education_spend.get('current_year') }}</strong>
+        </div>
+        {% endif %}
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;">
+            {% if education_spend.get('current_education_spend') is not none %}
+            <div style="background: rgba(56, 189, 248, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
+                <span style="font-size: 12px; color: #94a3b8;">Education Spend:</span>
+                <strong style="color:#38bdf8; margin-left:6px;">₹{{ education_spend.get('current_education_spend') | commas }}</strong>
+            </div>
+            {% endif %}
+            {% if education_spend.get('current_education_percentage') is not none %}
+            <span style="color:#64748b;">=</span>
+            <div style="background: rgba(34, 197, 94, 0.15); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(34, 197, 94, 0.35);">
+                <span style="font-size: 12px; color: #94a3b8;">% of total CSR:</span>
+                <strong style="color:#22c55e; margin-left:6px; font-size: 14px;">{{ education_spend.get('current_education_percentage') }}%</strong>
+            </div>
+            {% endif %}
+        </div>
+        {% if edu_breakdown %}
+        <div style="font-size: 11px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.04em;">Year-wise breakdown</div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px;">
+            {% for fy, row in edu_breakdown.items() %}
+            <div style="background: rgba(148,163,184,0.08); padding: 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15);">
+                <div style="font-size: 11px; color: #94a3b8; margin-bottom: 4px;">{{ fy }}</div>
+                <div style="font-size: 12px; color: #f1f5f9;">Education: <strong>₹{{ row.get('education_spend', '-') | commas }}</strong></div>
+                <div style="font-size: 12px; color: #cbd5e1;">Total CSR: ₹{{ row.get('total_csr_spend', '-') | commas }}</div>
+                {% if row.get('education_percentage') is not none %}
+                <div style="font-size: 13px; color: #22c55e; font-weight: 600; margin-top: 4px;">{{ row.get('education_percentage') }}%</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% elif education_spend.get('note') %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; color: #94a3b8;">
+        🎓 Education CSR Spend: {{ education_spend.get('note') }}
+    </div>
+    {% endif %}
+
+    {% if c.get('annual_report_url') or c.get('screener_url') %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">📄 Source Documents:</div>
+        {% if c.get('screener_url') %}<div style="margin-bottom: 6px;"><a href="{{ c.get('screener_url') }}" target="_blank" class="source-link" style="font-size: 12px;">📊 Screener Profile</a></div>{% endif %}
+        {% if c.get('annual_report_url') %}<div><a href="{{ c.get('annual_report_url') }}" target="_blank" class="source-link" style="font-size: 12px;">📑 Annual Report PDF</a></div>{% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Ennoble Program Fitment -->
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Ennoble Program Fitment</h2>
+    {% set pfit = c.get('program_fitment', {}) or {} %}
+    {% if not pfit %}
+    <div style="font-size: 13px; color: #94a3b8;">Not scored yet - this company hasn't been through the scoring agent.</div>
+    {% else %}
+    <div class="csr-program-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px;">
+        {% set overall_fit = pfit.get('Ennoble Fitment', 'Not Evident') %}
+        {% set is_high = 'high' in overall_fit.lower() %}
+        {% set is_medium = 'medium' in overall_fit.lower() or 'mod' in overall_fit.lower() %}
+        <div class="csr-program-item" style="grid-column: 1 / -1; {% if is_high %}background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.3);{% elif is_medium %}background: rgba(249, 115, 22, 0.12); border: 1px solid rgba(249, 115, 22, 0.3);{% else %}background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.25);{% endif %}">
+            <span class="csr-program-label" style="font-weight:700; color:#f1f5f9;">🌟 Overall Ennoble Fitment</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if is_high else ('medium' if is_medium else ('no' if 'low' in overall_fit.lower() else 'unknown')) }}">{{ overall_fit }}</span>
+        </div>
+        {% set stem_fit = pfit.get('STEM Education', 'Not Evident') %}
+        <div class="csr-program-item">
+            <span class="csr-program-label">🔬 STEM Education</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if 'high' in stem_fit.lower() else ('medium' if ('medium' in stem_fit.lower() or 'mod' in stem_fit.lower()) else ('no' if 'low' in stem_fit.lower() else 'unknown')) }}">{{ stem_fit }}</span>
+        </div>
+        {% set infra_fit = pfit.get('School Infrastructure Transformation', 'Not Evident') %}
+        <div class="csr-program-item">
+            <span class="csr-program-label">🏫 School Infra Transformation</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if 'high' in infra_fit.lower() else ('medium' if ('medium' in infra_fit.lower() or 'mod' in infra_fit.lower()) else ('no' if 'low' in infra_fit.lower() else 'unknown')) }}">{{ infra_fit }}</span>
+        </div>
+        {% set holistic_fit = pfit.get('Holistic School Transformation', 'Not Evident') %}
+        <div class="csr-program-item">
+            <span class="csr-program-label">🔄 Holistic School Transformation</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if 'high' in holistic_fit.lower() else ('medium' if ('medium' in holistic_fit.lower() or 'mod' in holistic_fit.lower()) else ('no' if 'low' in holistic_fit.lower() else 'unknown')) }}">{{ holistic_fit }}</span>
+        </div>
+        {% set anganwadi_fit = pfit.get('Anganwadi Transformation', 'Not Evident') %}
+        <div class="csr-program-item">
+            <span class="csr-program-label">🌱 Anganwadi Transformation</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if 'high' in anganwadi_fit.lower() else ('medium' if ('medium' in anganwadi_fit.lower() or 'mod' in anganwadi_fit.lower()) else ('no' if 'low' in anganwadi_fit.lower() else 'unknown')) }}">{{ anganwadi_fit }}</span>
+        </div>
+        {% set quality_fit = pfit.get('Quality Education', 'Not Evident') %}
+        <div class="csr-program-item">
+            <span class="csr-program-label">📚 Quality Education</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if 'high' in quality_fit.lower() else ('medium' if ('medium' in quality_fit.lower() or 'mod' in quality_fit.lower()) else ('no' if 'low' in quality_fit.lower() else 'unknown')) }}">{{ quality_fit }}</span>
+        </div>
+        {% set model_fit = pfit.get('Model School Transformation', 'Not Evident') %}
+        <div class="csr-program-item">
+            <span class="csr-program-label">🏛️ Model School Transformation</span>
+            <span class="csr-flag-badge csr-flag-{{ 'yes' if 'high' in model_fit.lower() else ('medium' if ('medium' in model_fit.lower() or 'mod' in model_fit.lower()) else ('no' if 'low' in model_fit.lower() else 'unknown')) }}">{{ model_fit }}</span>
+        </div>
+    </div>
+    {% endif %}
+    {% if c.get('tier_reasoning') %}
+    <div class="detail-field full-width" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <strong>Why {{ c.tier }}?</strong>
+        <span>{{ c.tier_reasoning }}</span>
+    </div>
+    {% endif %}
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-gutter mb-stack-lg">
+    <!-- CSR Contact Person -->
+    <div class="glass-panel rounded-xl p-stack-lg">
+        <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">CSR Contact Person</h2>
+        <div class="detail-fields">
+            <div class="detail-field">
+                <strong>Name:</strong>
+                <span>{{ contact.get('first_name', 'Not publicly available') }} {{ contact.get('last_name', '') }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Designation:</strong>
+                <span>{{ contact.get('designation', 'Not publicly available') }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Email:</strong>
+                <span>{{ contact.get('email', 'Not publicly available') }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Mobile:</strong>
+                <span>{{ contact.get('mobile', 'Not publicly available') }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Phone:</strong>
+                <span>{{ contact.get('phone', 'Not publicly available') }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>LinkedIn:</strong>
+                {% set li_raw = contact.get('linkedin') or contact.get('linkedin_url') or '' %}
+                {% if li_raw and li_raw not in ['Not publicly available', 'Not Found', ''] %}
+                    {% if li_raw.startswith('http') %}{% set li_url = li_raw %}
+                    {% elif li_raw.startswith('//') %}{% set li_url = 'https:' + li_raw %}
+                    {% elif li_raw.startswith('/') %}{% set li_url = 'https://www.linkedin.com' + li_raw %}
+                    {% else %}{% set li_url = 'https://' + li_raw %}{% endif %}
+                <a href="{{ li_url }}" target="_blank" rel="noopener noreferrer" class="source-link">View Profile</a>
+                {% else %}
+                <span>Not publicly available</span>
+                {% endif %}
+            </div>
+            <div class="detail-field">
+                <strong>Contact Source:</strong>
+                <span>{{ contact.get('source', 'Not publicly available') }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Key Contacts -->
+    <div class="glass-panel rounded-xl p-stack-lg">
+        <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Key Contacts</h2>
+        {% if contacts and contacts.get('contacts') %}
+        {% for contact_item in contacts['contacts'] %}
+        <div class="contact-detail-card">
+            <div class="detail-field"><strong>Name:</strong> <span>{{ contact_item.get('name', 'Unknown') }}</span></div>
+            <div class="detail-field"><strong>Designation:</strong> <span>{{ contact_item.get('designation', 'N/A') }}</span></div>
+            <div class="detail-field"><strong>Email:</strong> <span>{{ contact_item.get('email', 'Not Found') }}</span></div>
+            <div class="detail-field"><strong>Source:</strong> <span>{{ contact_item.get('source', '-') }}</span></div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="font-body-sm text-body-sm text-on-surface-variant">No decision-makers found yet.</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- CRM Status & Follow-up -->
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">CRM Status &amp; Follow-up</h2>
+
+    <div class="flex flex-wrap gap-3 mb-stack-md">
+        {% if c.get('tier') == 'Tier C' and c.approval_status == 'approved' %}
+        <span class="approval-badge approval-approved">✓ Approved</span>
+        {% elif c.get('tier') == 'Tier C' and c.approval_status == 'rejected' %}
+        <span class="approval-badge approval-rejected">✗ Rejected</span>
+        {% elif c.get('tier') == 'Tier C' %}
+        <form action="/approve/{{ c.id_str }}" method="post" class="inline-block">
+            <button type="submit" class="btn-primary font-label-md text-label-md px-4 py-2 rounded-lg">✓ Approve</button>
+        </form>
+        <form action="/reject/{{ c.id_str }}" method="post" class="inline-block">
+            <button type="submit" class="btn-secondary font-label-md text-label-md px-4 py-2 rounded-lg">✗ Reject</button>
+        </form>
+        {% endif %}
+
+        {% if c.approval_status == 'approved' and c.upload_status != 'uploaded' %}
+        <form action="/upload-crm/{{ c.id_str }}" method="post" class="inline-block">
+            <button type="submit" class="btn-secondary font-label-md text-label-md px-4 py-2 rounded-lg">⬆ Upload to Zoho</button>
+        </form>
+        {% elif c.upload_status == 'uploaded' %}
+        <form action="/upload-crm/{{ c.id_str }}" method="post" class="inline-block">
+            <button type="submit" class="btn-secondary font-label-md text-label-md px-4 py-2 rounded-lg">🔄 Re-upload</button>
+        </form>
+        {% endif %}
+
+        <form action="/delete/{{ c.id_str }}" method="post" class="inline-block" onsubmit="return confirm('Delete {{ c.company_name }}? This cannot be undone.')">
+            <button type="submit" class="font-label-md text-label-md px-4 py-2 rounded-lg" style="background: rgba(239,68,68,0.15); color:#fca5a5; border:1px solid rgba(239,68,68,0.3);">🗑 Delete</button>
+        </form>
+    </div>
+
+    <div class="detail-fields" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem;">
+        <div class="detail-field">
+            <strong>Lead Owner:</strong>
+            <input type="text" class="form-input" value="{{ crm.get('lead_owner') or username or '' }}" onchange="updateLeadOwner('{{ c.id_str }}', this.value)" placeholder="Enter Lead Owner name">
+        </div>
+        <div class="detail-field">
+            <strong>Lead Status:</strong>
+            <select class="form-input" onchange="updateLeadStatus('{{ c.id_str }}', this.value)">
+                <option value="">{{ crm.get('lead_status') or 'open - not contacted' }}</option>
+                <option value="open - not contacted">Open - Not Contacted</option>
+                <option value="open - contacted">Open - Contacted</option>
+                <option value="working">Working</option>
+                <option value="negotiation">Negotiation</option>
+                <option value="qualified">Qualified</option>
+                <option value="closed">Closed</option>
+            </select>
+        </div>
+        <div class="detail-field">
+            <strong>Next Follow-up Date:</strong>
+            <input type="date" class="form-input" value="{{ crm.get('next_followups_date') or crm.get('next_followup_date') or '' }}" onchange="updateFollowup('{{ c.id_str }}', this.value)">
+        </div>
+        <div class="detail-field">
+            <strong>Decision Maker Name:</strong>
+            <input type="text" class="form-input" value="{{ crm.get('decision_maker_name') or '' }}" onchange="updateDecisionMakerName('{{ c.id_str }}', this.value)" placeholder="Enter Decision Maker Name">
+        </div>
+        <div class="detail-field">
+            <strong>Decision Maker Phone:</strong>
+            <input type="tel" class="form-input" value="{{ crm.get('decision_maker_phone') or '' }}" onchange="updateDecisionMakerPhone('{{ c.id_str }}', this.value)" placeholder="Enter Phone Number">
+        </div>
+        <div class="detail-field">
+            <strong>Decision Maker Email:</strong>
+            <input type="email" class="form-input" value="{{ crm.get('decision_maker_email') or '' }}" onchange="updateDecisionMakerEmail('{{ c.id_str }}', this.value)" placeholder="Enter Email Address">
+        </div>
+        <div class="detail-field full-width">
+            <strong>Immediate Action:</strong>
+            <textarea class="form-input" rows="2" onchange="updateImmediateAction('{{ c.id_str }}', this.value)" placeholder="e.g., Send proposal, Schedule meeting">{{ crm.get('immediate_action') or '' }}</textarea>
+        </div>
+        <div class="detail-field full-width">
+            <strong>Description/Notes:</strong>
+            <textarea class="form-input" rows="2" onchange="updateDescription('{{ c.id_str }}', this.value)" placeholder="Add any notes or additional information">{{ crm.get('description') or '' }}</textarea>
+        </div>
+    </div>
+</div>
+
+<!-- Export & Outreach -->
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Export &amp; Outreach</h2>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <button class="action-btn download-btn" onclick="downloadResearchPDF('{{ c.id_str }}', '{{ c.company_name }}')">📥 Download PDF</button>
+        <button class="action-btn email-btn" onclick="openEmailModal('{{ c.id_str }}', '{{ c.company_name }}')">📧 Email Report</button>
+        <button class="action-btn gpt-table-btn" style="background: linear-gradient(135deg, #a855f7, #7e22ce); color: #fff; box-shadow: 0 4px 14px rgba(168, 85, 247, 0.4);" onclick="copyGptTable('{{ c.id_str }}', '{{ c.company_name }}')">📋 Copy GPT Table Row</button>
+    </div>
+
+    {% if c.approval_status == 'approved' %}
+    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <strong style="display:block; margin-bottom: 10px; font-size:13px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.06em;">Outreach Preparation</strong>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="action-btn outreach-btn warm-connect-btn" id="warm-btn-{{ c.id_str }}" onclick="checkWarmConnect('{{ c.id_str }}')">🔗 Check Warm Connect</button>
+            <button class="action-btn outreach-btn draft-msg-btn" id="draft-btn-{{ c.id_str }}" onclick="draftMessage('{{ c.id_str }}')">✍️ Draft Message</button>
+            <button class="action-btn outreach-btn brief-btn" id="brief-btn-{{ c.id_str }}" onclick="generateBrief('{{ c.id_str }}')">📋 Meeting Brief</button>
+        </div>
+
+        {% if c.get('warm_connect') %}
+        <div class="detail-field" style="margin-top: 14px;">
+            <strong>🔗 Warm Connect:</strong>
+            <span class="outreach-result-badge">
+                {{ c.warm_connect.get('suggested_connector_name') or 'None found' }}
+                <em style="color:#94a3b8; font-size:12px; margin-left:6px;">({{ c.warm_connect.get('confidence', '') }} confidence)</em>
+            </span>
+            {% if c.warm_connect.get('connection_path') %}
+            <div style="margin-top:6px; font-size:12px; color:#94a3b8;">{{ c.warm_connect.get('connection_path') }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if c.get('drafted_message') %}
+        <div class="detail-field full-width" style="margin-top: 14px;">
+            <strong>✍️ Drafted Message
+                <span class="draft-status-pill">{{ c.drafted_message.get('status', 'DRAFT') | upper }} — review before sending</span>
+            </strong>
+            <textarea class="form-input" rows="5" readonly style="margin-top:8px; font-size:13px; line-height:1.6;">{{ c.drafted_message.get('body', '') }}</textarea>
+        </div>
+        {% endif %}
+
+        {% if c.get('meeting_brief') %}
+        <div class="detail-field full-width" style="margin-top: 14px;">
+            <strong>📋 Meeting Brief:</strong>
+            <div class="meeting-brief-box" style="margin-top:8px;">
+                {% if c.meeting_brief.get('company_snapshot') %}
+                <div class="brief-section"><span class="brief-label">Company Snapshot</span><p>{{ c.meeting_brief.get('company_snapshot') }}</p></div>
+                {% endif %}
+                {% if c.meeting_brief.get('csr_priorities') %}
+                <div class="brief-section"><span class="brief-label">CSR Priorities</span><p>{{ c.meeting_brief.get('csr_priorities') }}</p></div>
+                {% endif %}
+                {% if c.meeting_brief.get('ennoble_pitch_angle') %}
+                <div class="brief-section"><span class="brief-label">Pitch Angle</span><p>{{ c.meeting_brief.get('ennoble_pitch_angle') }}</p></div>
+                {% endif %}
+                {% if c.meeting_brief.get('key_talking_points') %}
+                <div class="brief-section">
+                    <span class="brief-label">Key Talking Points</span>
+                    <ul>{% for pt in c.meeting_brief.get('key_talking_points', []) %}<li>{{ pt }}</li>{% endfor %}</ul>
+                </div>
+                {% endif %}
+                {% if c.meeting_brief.get('generated_at') %}
+                <div style="margin-top:10px; font-size:11px; color:#475569;">Generated: {{ c.meeting_brief.get('generated_at')[:19] | replace('T',' ') }} UTC</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Email Research Modal -->
+<div id="emailModal" class="modal-overlay" style="display:none;" onclick="closeEmailModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="closeEmailModal()" title="Close">✕</button>
+        <div class="modal-icon">📧</div>
+        <h2 class="modal-title">Email Research Report</h2>
+        <p class="modal-subtitle" id="modalCompanyLabel">Sending research data for <strong></strong></p>
+        <div class="modal-form">
+            <label class="modal-label" for="recipientEmail">Recipient Email <span class="required">*</span></label>
+            <input type="email" id="recipientEmail" class="modal-input" placeholder="e.g. partner@company.com" autocomplete="email">
+            <label class="modal-label" for="recipientName" style="margin-top:14px;">Recipient Name <span style="color:#888;font-size:12px;">(optional)</span></label>
+            <input type="text" id="recipientName" class="modal-input" placeholder="e.g. Priya Sharma">
+        </div>
+        <div class="modal-actions">
+            <button class="modal-btn modal-btn-cancel" onclick="closeEmailModal()">Cancel</button>
+            <button class="modal-btn modal-btn-send" id="sendEmailBtn" onclick="sendEmailReport()">Send Report</button>
+        </div>
+        <div id="emailStatus" class="email-status" style="display:none;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const COMPANY_ID = "{{ c.id_str }}";
+
+    function updateLeadOwner(companyId, owner) {
+        const formData = new FormData();
+        formData.append('lead_owner', owner);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Lead owner updated successfully' : 'Error updating lead owner: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update lead owner', 'error'));
+    }
+
+    function updateFollowup(companyId, date) {
+        const formData = new FormData();
+        formData.append('next_followup_date', date);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Follow-up date updated successfully' : 'Error updating follow-up date: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update follow-up date', 'error'));
+    }
+
+    function updateLeadStatus(companyId, status) {
+        if (!status) return;
+        const formData = new FormData();
+        formData.append('lead_status', status);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Lead status updated successfully' : 'Error updating lead status: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update lead status', 'error'));
+    }
+
+    function updateImmediateAction(companyId, action) {
+        const formData = new FormData();
+        formData.append('immediate_action', action);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Immediate action updated successfully' : 'Error updating immediate action: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update immediate action', 'error'));
+    }
+
+    function updateDescription(companyId, description) {
+        const formData = new FormData();
+        formData.append('description', description);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Description updated successfully' : 'Error updating description: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update description', 'error'));
+    }
+
+    function updateDecisionMakerName(companyId, name) {
+        const formData = new FormData();
+        formData.append('decision_maker_name', name);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Decision maker name updated successfully' : 'Error updating decision maker name: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update decision maker name', 'error'));
+    }
+
+    function updateDecisionMakerPhone(companyId, phone) {
+        const formData = new FormData();
+        formData.append('decision_maker_phone', phone);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Decision maker phone updated successfully' : 'Error updating decision maker phone: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update decision maker phone', 'error'));
+    }
+
+    function updateDecisionMakerEmail(companyId, email) {
+        const formData = new FormData();
+        formData.append('decision_maker_email', email);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => showNotification(data.status === 'updated' ? 'Decision maker email updated successfully' : 'Error updating decision maker email: ' + data.message, data.status === 'updated' ? 'success' : 'error'))
+            .catch(() => showNotification('Failed to update decision maker email', 'error'));
+    }
+
+    function downloadResearchPDF(companyId, companyName) {
+        showNotification(`Preparing PDF for ${companyName}…`, 'info');
+        window.location.href = `/download-research/${companyId}`;
+    }
+
+    let _emailCompanyId = null;
+    function openEmailModal(companyId, companyName) {
+        _emailCompanyId = companyId;
+        document.getElementById('modalCompanyLabel').innerHTML = `Sending research data for <strong>${companyName}</strong>`;
+        document.getElementById('recipientEmail').value = '';
+        document.getElementById('recipientName').value = '';
+        document.getElementById('emailStatus').style.display = 'none';
+        document.getElementById('emailModal').style.display = 'flex';
+        setTimeout(() => document.getElementById('recipientEmail').focus(), 250);
+    }
+    function closeEmailModal(evt) {
+        if (evt && evt.target !== document.getElementById('emailModal')) return;
+        document.getElementById('emailModal').style.display = 'none';
+        _emailCompanyId = null;
+    }
+    function sendEmailReport() {
+        const email = document.getElementById('recipientEmail').value.trim();
+        const name = document.getElementById('recipientName').value.trim();
+        const statusEl = document.getElementById('emailStatus');
+        if (!email) { statusEl.className = 'email-status error'; statusEl.style.display = 'block'; statusEl.textContent = 'Please enter a recipient email.'; return; }
+        const btn = document.getElementById('sendEmailBtn');
+        btn.disabled = true; btn.textContent = 'Sending…';
+        const formData = new FormData();
+        formData.append('recipient_email', email);
+        if (name) formData.append('recipient_name', name);
+        fetch(`/email-research/${_emailCompanyId}`, { method: 'POST', body: formData })
+            .then(async r => {
+                let data;
+                try { data = await r.json(); } catch (e) {
+                    throw new Error(r.status === 500 ? 'Server error - check SENDER_EMAIL/SENDER_PASSWORD configuration.' : 'Unexpected server response.');
+                }
+                if (!r.ok) throw new Error(data.message || 'Failed to send email.');
+                return data;
+            })
+            .then(data => {
+                statusEl.className = 'email-status success'; statusEl.style.display = 'block'; statusEl.textContent = data.message || 'Sent!';
+                btn.textContent = '✓ Sent!';
+                setTimeout(() => closeEmailModal(), 2200);
+            })
+            .catch(error => {
+                statusEl.className = 'email-status error'; statusEl.style.display = 'block'; statusEl.textContent = error.message;
+                btn.disabled = false; btn.textContent = 'Send Report';
+            });
+    }
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') document.getElementById('emailModal').style.display = 'none';
+    });
+
+    function copyGptTable(companyId, companyName) {
+        showNotification(`Preparing GPT Table row for ${companyName}…`, 'info');
+        fetch(`/copy-gpt-table/${companyId}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'success' && data.table) {
+                    navigator.clipboard.writeText(data.table).then(() => {
+                        showNotification(`✓ Horizontal GPT Table copied for ${companyName}!`, 'success');
+                    }).catch(() => {
+                        const ta = document.createElement('textarea');
+                        ta.value = data.table; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                        document.body.appendChild(ta); ta.select();
+                        try { document.execCommand('copy'); showNotification(`✓ Horizontal GPT Table copied for ${companyName}!`, 'success'); }
+                        catch (e) { showNotification('Could not copy to clipboard', 'error'); }
+                        document.body.removeChild(ta);
+                    });
+                } else {
+                    showNotification('Failed to generate GPT table row', 'error');
+                }
+            })
+            .catch(error => showNotification('Error copying GPT table row: ' + error.message, 'error'));
+    }
+
+    function _setOutreachLoading(btnId, loading, originalText) {
+        const btn = document.getElementById(btnId);
+        if (!btn) return;
+        btn.disabled = loading;
+        btn.textContent = loading ? '⏳ Working…' : originalText;
+    }
+
+    function checkWarmConnect(id) {
+        _setOutreachLoading(`warm-btn-${id}`, true);
+        fetch(`/warm-connect/${id}`, { method: 'POST' })
+            .then(r => r.json())
+            .then(() => { showNotification('Warm connect check complete!', 'success'); window.location.reload(); })
+            .catch(err => { showNotification('Warm connect failed: ' + err.message, 'error'); _setOutreachLoading(`warm-btn-${id}`, false, '🔗 Check Warm Connect'); });
+    }
+
+    function draftMessage(id) {
+        _setOutreachLoading(`draft-btn-${id}`, true);
+        const formData = new FormData();
+        formData.append('channel', 'email');
+        fetch(`/draft-message/${id}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(() => { showNotification('Message drafted!', 'success'); window.location.reload(); })
+            .catch(err => { showNotification('Draft message failed: ' + err.message, 'error'); _setOutreachLoading(`draft-btn-${id}`, false, '✍️ Draft Message'); });
+    }
+
+    function generateBrief(id) {
+        _setOutreachLoading(`brief-btn-${id}`, true);
+        fetch(`/meeting-brief/${id}`, { method: 'POST' })
+            .then(r => r.json())
+            .then(() => { showNotification('Meeting brief generated!', 'success'); window.location.reload(); })
+            .catch(err => { showNotification('Meeting brief failed: ' + err.message, 'error'); _setOutreachLoading(`brief-btn-${id}`, false, '📋 Meeting Brief'); });
+    }
+</script>
+{% endblock %}

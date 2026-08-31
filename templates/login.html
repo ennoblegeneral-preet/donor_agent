@@ -1,0 +1,56 @@
+{% extends "base_auth.html" %}
+{% block title %}Login - DonorIQ{% endblock %}
+{% block content %}
+<div class="glass-card rounded-xl p-8 w-full relative overflow-hidden">
+    <div class="absolute -top-10 -right-10 w-32 h-32 bg-primary-container rounded-full blur-[60px] opacity-20 pointer-events-none"></div>
+
+    <div class="text-center mb-stack-lg relative z-10">
+        <h1 class="font-headline-md text-headline-md text-on-surface mb-stack-sm">Welcome back to DonorIQ</h1>
+        <p class="font-body-sm text-body-sm text-on-surface-variant">The Intelligence Layer for Donor Research</p>
+    </div>
+
+    <form method="POST" action="/login" class="space-y-stack-md relative z-10">
+        {% if error %}
+        <div class="rounded-lg px-4 py-3 text-body-sm font-body-sm" style="background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.35); color: #fca5a5;">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <div class="flex border border-outline-variant rounded-lg overflow-hidden">
+            <button type="button" class="role-toggle-btn flex-1 py-2 font-label-md text-label-md transition-colors {% if login_as != 'user' %}bg-primary text-on-primary{% else %}bg-transparent text-on-surface-variant{% endif %}" data-value="admin" onclick="selectRole(this)">Admin</button>
+            <button type="button" class="role-toggle-btn flex-1 py-2 font-label-md text-label-md transition-colors {% if login_as == 'user' %}bg-primary text-on-primary{% else %}bg-transparent text-on-surface-variant{% endif %}" data-value="user" onclick="selectRole(this)">Employee</button>
+        </div>
+        <input type="hidden" name="login_as" id="login_as" value="{{ login_as or 'admin' }}">
+
+        <div class="input-group">
+            <input class="w-full px-4 py-3 rounded-lg font-body-sm text-body-sm" id="username" name="username" placeholder=" " autocomplete="username" required autofocus type="text">
+            <label class="font-body-sm" for="username">Username</label>
+        </div>
+        <div class="input-group">
+            <input class="w-full px-4 py-3 rounded-lg font-body-sm text-body-sm" id="password" name="password" placeholder=" " autocomplete="current-password" required type="password">
+            <label class="font-body-sm" for="password">Password</label>
+        </div>
+
+        <button class="shimmer-btn w-full flex justify-center py-3 px-4 rounded-lg text-white font-label-md text-label-md" type="submit">
+            Sign In
+        </button>
+    </form>
+</div>
+<div class="text-center mt-stack-lg">
+    <p class="font-body-sm text-body-sm text-on-surface-variant">
+        New to DonorIQ? Contact your administrator.
+    </p>
+</div>
+
+<script>
+    function selectRole(btn) {
+        document.querySelectorAll('.role-toggle-btn').forEach(b => {
+            b.classList.remove('bg-primary', 'text-on-primary');
+            b.classList.add('bg-transparent', 'text-on-surface-variant');
+        });
+        btn.classList.remove('bg-transparent', 'text-on-surface-variant');
+        btn.classList.add('bg-primary', 'text-on-primary');
+        document.getElementById('login_as').value = btn.dataset.value;
+    }
+</script>
+{% endblock %}

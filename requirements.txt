@@ -1,0 +1,17 @@
+flask
+flask-limiter
+flask-mail
+pymongo>=4.6.0
+pydantic
+python-dotenv
+requests
+redis>=5.0.0
+tavily-python
+groq
+beautifulsoup4
+pdfplumber
+reportlab
+openpyxl
+jinja2
+certifi
+gunicorn

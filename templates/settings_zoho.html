@@ -1,0 +1,67 @@
+{% extends "base_app.html" %}
+{% set active_nav = 'settings' %}
+
+{% block title %}Zoho CRM Settings - DonorIQ{% endblock %}
+{% block page_kicker %}
+<a href="/" class="inline-flex items-center gap-1 font-label-md text-label-md text-on-surface-variant hover:text-primary transition-colors mb-2">
+    <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+    Back to Dashboard
+</a>
+<p class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-1">User Settings</p>
+{% endblock %}
+{% block page_title %}Zoho CRM Integration{% endblock %}
+{% block page_subtitle %}Configure your individual Zoho CRM API credentials so pushed leads go directly to your personal Zoho CRM account.{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+    {% if success %}
+    <div class="glass-card rounded-xl p-stack-md mb-stack-lg" style="border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.1);">
+        <p class="font-label-md text-label-md" style="color: #4ade80;">✓ {{ success }}</p>
+    </div>
+    {% endif %}
+
+    <div class="glass-panel rounded-xl p-stack-lg">
+        <form method="POST" action="/settings/zoho" class="space-y-4">
+            <div>
+                <label class="block font-label-md text-label-md text-on-surface mb-1">Zoho Client ID</label>
+                <input type="text" name="client_id" value="{{ zoho_keys.get('client_id', '') }}" class="form-input" placeholder="e.g. 1000.XXXXXX..." autocomplete="off">
+            </div>
+
+            <div>
+                <label class="block font-label-md text-label-md text-on-surface mb-1">Zoho Client Secret</label>
+                <input type="password" name="client_secret" value="{{ zoho_keys.get('client_secret', '') }}" class="form-input" placeholder="e.g. e3deb93a..." autocomplete="off">
+            </div>
+
+            <div>
+                <label class="block font-label-md text-label-md text-on-surface mb-1">Zoho Refresh Token</label>
+                <input type="password" name="refresh_token" value="{{ zoho_keys.get('refresh_token', '') }}" class="form-input" placeholder="e.g. 1000.35c79..." autocomplete="off">
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                <div>
+                    <label class="block font-label-md text-label-md text-on-surface mb-1">API Domain</label>
+                    <select name="api_domain" class="form-input">
+                        <option value="https://www.zohoapis.in" {% if zoho_keys.get('api_domain') == 'https://www.zohoapis.in' %}selected{% endif %}>India (https://www.zohoapis.in)</option>
+                        <option value="https://www.zohoapis.com" {% if zoho_keys.get('api_domain') == 'https://www.zohoapis.com' %}selected{% endif %}>Global / US (https://www.zohoapis.com)</option>
+                        <option value="https://www.zohoapis.eu" {% if zoho_keys.get('api_domain') == 'https://www.zohoapis.eu' %}selected{% endif %}>Europe (https://www.zohoapis.eu)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block font-label-md text-label-md text-on-surface mb-1">Accounts URL</label>
+                    <select name="accounts_url" class="form-input">
+                        <option value="https://accounts.zoho.in" {% if zoho_keys.get('accounts_url') == 'https://accounts.zoho.in' %}selected{% endif %}>India (https://accounts.zoho.in)</option>
+                        <option value="https://accounts.zoho.com" {% if zoho_keys.get('accounts_url') == 'https://accounts.zoho.com' %}selected{% endif %}>Global / US (https://accounts.zoho.com)</option>
+                        <option value="https://accounts.zoho.eu" {% if zoho_keys.get('accounts_url') == 'https://accounts.zoho.eu' %}selected{% endif %}>Europe (https://accounts.zoho.eu)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="pt-4 flex items-center justify-between">
+                <button type="submit" class="btn-primary font-label-md text-label-md px-6 py-2.5 rounded-lg">Save Credentials</button>
+                <a href="/" class="font-label-md text-label-md text-on-surface-variant hover:text-on-surface transition-colors">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

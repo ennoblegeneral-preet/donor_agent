@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "_headtags.html" %}
+<title>{% block title %}DonorIQ{% endblock %}</title>
+</head>
+<body class="min-h-screen flex items-center justify-center p-gutter bg-radial-gradient text-on-surface font-body-md">
+<main class="w-full max-w-md">
+    <div class="flex justify-center mb-stack-lg">
+        <div class="h-16 w-16 rounded-lg flex items-center justify-center btn-primary">
+            <span class="material-symbols-outlined text-[32px] text-white">psychology</span>
+        </div>
+    </div>
+    {% block content %}{% endblock %}
+</main>
+</body>
+</html>
