@@ -128,6 +128,14 @@
                 <strong>Education CSR Spend:</strong>
                 <span>{{ research.get('education_csr_spend', '-') if research else '-' }}</span>
             </div>
+            <div class="detail-field">
+                <strong>Previous Year Total CSR Spend:</strong>
+                <span>{{ research.get('csr_spend_previous_fy', '-') if research else '-' }}</span>
+            </div>
+            <div class="detail-field">
+                <strong>Past 3 Years CSR Spend:</strong>
+                <span>{{ research.get('csr_spend_previous_3fy', '-') if research else '-' }}</span>
+            </div>
             {% set partners_list = (csr_data.get('implementation_partners') if csr_data else []) or (research.get('existing_implementation_partners') if research else []) or [] %}
             <div class="detail-field">
                 <strong>Implementation Partners (NGOs):</strong>

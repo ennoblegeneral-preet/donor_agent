@@ -352,17 +352,31 @@ def search_company_csr_info(company_name: str, website: str = None):
     domain = urlparse(website).netloc.replace("www.", "") if website else None
 
     csr_stages = [
+        # 1. Total CSR Expenditure & Previous Year Spend
         {
             "priority": 1,
-            "source_type": "Financial / CSR",
-            "query": f'"{company_name}" CSR ("total CSR expenditure" OR "CSR spend" OR "CSR obligation" OR "unspent amount" OR "amount spent") (crore OR lakh)  ("FY25" OR "FY 2024-25" OR "FY24" OR "FY 2023-24" OR "FY23") {" ".join(_recent_indian_fiscal_years())} ("annual report" OR BRSR OR site:csrbox.org)',
+            "source_type": "Financial / CSR Previous Year",
+            "query": f'"{company_name}" CSR ("total CSR expenditure" OR "CSR spend" OR "CSR obligation" OR "actual spend" OR "amount spent") (crore OR lakh) ("FY25" OR "FY 2024-25" OR "FY24" OR "FY 2023-24" OR "FY23") {" ".join(_recent_indian_fiscal_years())} ("annual report" OR BRSR OR site:csrbox.org OR "National CSR Portal")',
         },
+        # 2. Education Previous Year CSR Spend & Sector Breakdown
         {
             "priority": 1,
+            "source_type": "Education CSR Spend",
+            "query": f'"{company_name}" CSR ("education spend" OR "spent on education" OR "education budget" OR "education sector" OR "promotion of education" OR "Schedule VII" OR "school education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "FY 2023-24" OR "FY 2024-25" OR "annual report")',
+        },
+        # 3. Past 3 Years CSR Spend History & Trend
+        {
+            "priority": 1,
+            "source_type": "Past 3 Years CSR Spend",
+            "query": f'"{company_name}" CSR ("past 3 years" OR "last 3 years" OR "three financial years" OR "3-year average" OR "average net profit" OR "CSR trend" OR "FY 2022-23" OR "FY 2023-24" OR "FY 2024-25" OR "FY23" OR "FY24" OR "FY25") (expenditure OR spend OR obligation OR crore)',
+        },
+        # 4. CSR Overview & Initiatives
+        {
+            "priority": 2,
             "source_type": "CSR Overview",
             "query": f'"{company_name}" CSR (education OR school OR foundation OR "CSR project") (STEM OR infrastructure OR Anganwadi OR scholarship)',
         },
-        # 3. Implementation Partners & Operational Geography
+        # 5. Implementation Partners & Operational Geography
         {
             "priority": 2,
             "source_type": "Partners & Geography",
@@ -557,6 +571,12 @@ EDUCATION_FIELD_QUERIES = {
     ],
     "csr_model_school_transformation": [
         '{company} CSR ("model school" OR "adarsh vidyalaya" OR "PM SHRI" OR "school upgradation" OR "cluster schools" OR "government school upgrade" OR "flagship school")',
+    ],
+    "csr_education_spend_history": [
+        '{company} CSR ("education spend" OR "spent on education" OR "education budget" OR "promotion of education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "2024" OR "2023")',
+    ],
+    "csr_past_3yr_spend": [
+        '{company} CSR ("average CSR" OR "3 years CSR" OR "past three years" OR "CSR spend trend" OR "FY 2023-24" OR "FY 2024-25") (expenditure OR obligation OR spent)',
     ],
     "csr_education_validation": [
         '{company} CSR education "annual report" (BRSR OR "amount spent" OR "implementation partner" OR beneficiaries)',
