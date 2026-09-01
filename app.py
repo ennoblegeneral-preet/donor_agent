@@ -116,7 +116,7 @@ MAX_ZOHO_BULK = 50
 # N companies fires N companies' worth of concurrent Tavily searches at once,
 # which blows through Tavily's rate limit even with the per-call semaphore in
 # search_tool.py (that one only caps instantaneous concurrency, not sustained rate).
-_pipeline_concurrency = threading.Semaphore(4)
+_pipeline_concurrency = threading.Semaphore(10)
 
 
 
@@ -884,6 +884,216 @@ def email_research_bulk():
     except Exception as e:
         print(f"[Error] Bulk email sending failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _extract_decision_maker_info(company: dict) -> dict:
+    """Extracts company name, decision maker name, position, and LinkedIn URL cleanly."""
+    research = company.get("research_json") or {}
+    contact = research.get("contact") or {}
+    crm = company.get("crm") or {}
+    csr = company.get("csr_data") or {}
+
+    # Company name
+    company_name = company.get("company_name", "Unknown Company")
+
+    def _clean_val(v):
+        if not v or str(v).strip().lower() in ("not found", "none", "n/a", "not publicly available", "-", "null"):
+            return ""
+        return str(v).strip()
+
+    # Decision Maker Name
+    dm_name = _clean_val(crm.get("decision_maker_name"))
+    if not dm_name:
+        fname = _clean_val(contact.get("first_name"))
+        lname = _clean_val(contact.get("last_name"))
+        dm_name = f"{fname} {lname}".strip()
+    if not dm_name:
+        comm = csr.get("committee_members") or company.get("committee_members") or []
+        if comm and isinstance(comm, list):
+            dm_name = _clean_val(comm[0])
+    if not dm_name:
+        dm_name = "Not Available"
+
+    # Position / Designation
+    pos_candidates = [
+        crm.get("decision_maker_designation"),
+        crm.get("designation"),
+        contact.get("designation"),
+        contact.get("title"),
+        contact.get("role")
+    ]
+    position = ""
+    for pc in pos_candidates:
+        c = _clean_val(pc)
+        if c:
+            position = c
+            break
+    if not position:
+        if csr.get("committee_members") or company.get("committee_members"):
+            position = "CSR Committee Member"
+        else:
+            position = "Key Official / CSR Lead"
+
+    # LinkedIn URL - iterate through all possible candidate keys individually
+    li_candidates = [
+        crm.get("decision_maker_linkedin"),
+        crm.get("linkedin_url"),
+        crm.get("linkedin"),
+        contact.get("linkedin_url"),
+        contact.get("linkedin"),
+        research.get("linkedin_url"),
+        research.get("linkedin"),
+        company.get("linkedin_url"),
+        company.get("linkedin"),
+    ]
+    li_url = ""
+    for cand in li_candidates:
+        c = _clean_val(cand)
+        if c and "linkedin.com" in c.lower():
+            li_url = c
+            break
+
+    # Committee / member lookup fallback
+    comm_lookup = company.get("committee_members_linkedin") or csr.get("committee_members_linkedin") or {}
+    if not li_url and isinstance(comm_lookup, dict):
+        # 1. Match by decision maker name
+        for k, v in comm_lookup.items():
+            if v and "linkedin.com" in str(v).lower():
+                if dm_name and dm_name != "Not Available" and (dm_name.lower() in str(k).lower() or str(k).lower() in dm_name.lower()):
+                    li_url = str(v).strip()
+                    break
+        # 2. Match first available committee member link
+        if not li_url:
+            for v in comm_lookup.values():
+                if v and "linkedin.com" in str(v).lower():
+                    li_url = str(v).strip()
+                    break
+
+    if li_url:
+        if li_url.startswith("www."):
+            li_url = "https://" + li_url
+        elif not li_url.startswith("http"):
+            li_url = "https://" + li_url.lstrip("/")
+
+    # Collect ALL LinkedIn URLs found for the company (Decision Maker + Committee Members + CSR Leads)
+    all_li_list = []
+    if li_url and dm_name and dm_name != "Not Available":
+        all_li_list.append({"name": dm_name, "url": li_url, "role": position})
+
+
+    comm_dict = company.get("committee_members_linkedin") or csr.get("committee_members_linkedin") or {}
+    if isinstance(comm_dict, dict):
+        for name, u in comm_dict.items():
+            if u and "linkedin.com" in str(u).lower():
+                clean_u = str(u).strip()
+                if clean_u.startswith("www."):
+                    clean_u = "https://" + clean_u
+                elif not clean_u.startswith("http"):
+                    clean_u = "https://" + clean_u.lstrip("/")
+                if not any(item["url"].lower() == clean_u.lower() for item in all_li_list):
+                    all_li_list.append({"name": str(name).strip(), "url": clean_u, "role": "Committee Member"})
+
+    all_li_str = "; ".join([f"{item['name']} ({item['url']})" for item in all_li_list]) if all_li_list else (li_url or "Not Available")
+
+    return {
+        "id": company.get("id_str") or str(company.get("_id", "")),
+        "company_name": company_name,
+        "decision_maker_name": dm_name,
+        "position": position,
+        "linkedin_url": li_url,
+        "all_linkedin_urls": all_li_str,
+        "all_linkedin_list": all_li_list
+    }
+
+
+@app.route("/decision-makers-bulk", methods=["POST"])
+@login_required
+def decision_makers_bulk():
+    try:
+        username = session.get("username")
+        role = session.get("role")
+        payload = request.get_json(silent=True) or {}
+        company_ids = [str(cid) for cid in (payload.get("company_ids") or []) if cid]
+
+        all_companies = get_all_companies(username=username, role=role)
+        if company_ids:
+            target_companies = [c for c in all_companies if str(c.get("id_str") or c.get("_id")) in company_ids]
+        else:
+            target_companies = all_companies
+
+        results = [_extract_decision_maker_info(c) for c in target_companies]
+        return jsonify({"status": "success", "data": results, "total": len(results)})
+    except Exception as e:
+        print(f"[Error] Failed to fetch decision makers: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/export-decision-makers", methods=["POST"])
+@login_required
+def export_decision_makers():
+    try:
+        import io
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from flask import send_file
+
+        username = session.get("username")
+        role = session.get("role")
+        payload = request.get_json(silent=True) or {}
+        company_ids = [str(cid) for cid in (payload.get("company_ids") or []) if cid]
+
+        all_companies = get_all_companies(username=username, role=role)
+        if company_ids:
+            target_companies = [c for c in all_companies if str(c.get("id_str") or c.get("_id")) in company_ids]
+        else:
+            target_companies = all_companies
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Decision Makers"
+
+        headers = ["Company Name", "Decision Maker Name", "Position", "LinkedIn URL", "All Available LinkedIn URLs"]
+        ws.append(headers)
+
+        header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+
+        for col_num in range(1, 6):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        for c in target_companies:
+            info = _extract_decision_maker_info(c)
+            ws.append([
+                info["company_name"],
+                info["decision_maker_name"],
+                info["position"],
+                info["linkedin_url"],
+                info["all_linkedin_urls"]
+            ])
+
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or "")) for cell in col)
+            col_letter = openpyxl.utils.get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = min(max(max_len + 4, 18), 65)
+
+        out = io.BytesIO()
+        wb.save(out)
+        out.seek(0)
+
+        return send_file(
+            out,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="Decision_Makers_List.xlsx"
+        )
+    except Exception as e:
+        print(f"[Error] Failed to export decision makers: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 
 @app.route("/warm-connect/<company_id>", methods=["POST"])
 @login_required

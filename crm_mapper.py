@@ -233,6 +233,15 @@ def map_to_zoho_lead(company_data: dict) -> dict:
         payload["State"] = state[:100]
     payload["Country"] = "India"
 
+    # Standard + Custom Company Name & Industry Keys
+    if company_name:
+        payload["Company"] = company_name[:120]
+        payload["Company_Name"] = company_name[:120]
+    if industry:
+        payload["Industry"] = industry[:120]
+        payload["industry_1"] = industry[:120]
+        payload["Industry_1"] = industry[:120]
+
     # Map custom field keys if defined in user's Zoho CRM layout
     if lead_tier:
         payload["Rating"] = lead_tier
@@ -276,13 +285,54 @@ def map_to_zoho_lead(company_data: dict) -> dict:
     if sources_links:
         payload["Lead_Sources"] = sources_links[:255]
 
-    # Latest turnover
-    latest_turnover = turnover_dict.get(fiscal_years[0]) if fiscal_years else None
+    # Map Financial Data Fields (Annual Turnover, PBT, Net Profit, Networth, Prescribed CSR)
+    latest_fy = fiscal_years[0] if fiscal_years else None
+    latest_turnover = turnover_dict.get(latest_fy) if latest_fy else None
+    latest_pbt = pbt_dict.get(latest_fy) if latest_fy else None
+    latest_net_profit = net_profit_dict.get(latest_fy) if latest_fy else None
+    latest_net_worth = net_worth_dict.get(latest_fy) if latest_fy else None
+
+    # Annual Turnover
     if latest_turnover is not None:
         try:
             payload["Annual_Revenue"] = float(latest_turnover)
         except (ValueError, TypeError):
             pass
+        val_str = f"₹{latest_turnover:,.2f} Cr" if isinstance(latest_turnover, (int, float)) else str(latest_turnover)
+        payload["annual_turnover"] = val_str
+        payload["Annual_Turnover"] = val_str
+        payload["Turnover"] = val_str
+
+    # PBT (Profit Before Tax)
+    if latest_pbt is not None:
+        val_str = f"₹{latest_pbt:,.2f} Cr" if isinstance(latest_pbt, (int, float)) else str(latest_pbt)
+        payload["pbt"] = val_str
+        payload["PBT"] = val_str
+        payload["Profit_Before_Tax"] = val_str
+
+    # Net Profit
+    if latest_net_profit is not None:
+        val_str = f"₹{latest_net_profit:,.2f} Cr" if isinstance(latest_net_profit, (int, float)) else str(latest_net_profit)
+        payload["net_profit"] = val_str
+        payload["Net_Profit"] = val_str
+        payload["Profit_After_Tax"] = val_str
+
+    # Networth
+    if latest_net_worth is not None:
+        val_str = f"₹{latest_net_worth:,.2f} Cr" if isinstance(latest_net_worth, (int, float)) else str(latest_net_worth)
+        payload["networth"] = val_str
+        payload["Networth"] = val_str
+        payload["Net_Worth"] = val_str
+
+    # Minimum CSR Spend for the Financial Year (Prescribed CSR Obligation)
+    csr_budget_val = prescribed_csr or csr_spend_prev
+    if csr_budget_val:
+        val_str = f"₹{csr_budget_val} Cr" if isinstance(csr_budget_val, (int, float)) else str(csr_budget_val)
+        payload["minimum_csr_spenf_for_the_financial_year"] = val_str
+        payload["Minimum_CSR_Spenf_for_the_Financial_Year"] = val_str
+        payload["minimum_csr_spend_for_the_financial_year"] = val_str
+        payload["Minimum_CSR_Spend_for_the_Financial_Year"] = val_str
+        payload["Prescribed_CSR"] = val_str
 
     return payload
 
