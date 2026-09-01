@@ -10,34 +10,66 @@ def first_source_url(research: dict) -> str:
     return ""
 
 
+def clean_crm_val(val):
+    """Return empty string if value is None or literal 'Not Found' / 'None' / 'N/A'."""
+    if val is None:
+        return ""
+    if isinstance(val, list):
+        filtered = [str(x).strip() for x in val if x and str(x).strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
+        return ", ".join(filtered)
+    s = str(val).strip()
+    if s.lower() in ("not found", "none", "n/a", "not publicly available", "-", "null", "undefined"):
+        return ""
+    return s
+
+
 def map_to_zoho_lead(company_data: dict) -> dict:
     """
     Maps a MongoDB company record to the Zoho CRM Leads module.
-    Zoho Leads requires Last_Name, so the company name is used for it.
-    Includes research data + CRM dashboard fields.
+    Fills all 21 standard + custom fields if available, leaving missing/Not Found fields empty.
     """
     research = company_data.get("research_json") or {}
     crm = company_data.get("crm") or {}
     contact = research.get("contact") or {}
     financial_data = company_data.get("financial_data") or {}
 
-    # Latest fiscal year's turnover -> Zoho's standard Annual_Revenue field.
-    # Sent as-is in Crores (not converted to rupees) - matches how the rest
-    # of this app displays financial figures, by team decision.
-    # Rest of financial_data (net worth, PBT, net profit, CSR spend) stays
-    # in Description until custom fields exist (blocked on Free Edition).
-    fiscal_years = financial_data.get("fiscal_years") or []
-    annual_revenue = (financial_data.get("turnover") or {}).get(fiscal_years[0]) if fiscal_years else None
+    # Extract clean values for all 21 fields
+    company_name = clean_crm_val(company_data.get("company_name")) or "Unknown Company"
+    website = clean_crm_val(company_data.get("website") or first_source_url(research))
+    lead_owner = clean_crm_val(crm.get("lead_owner") or company_data.get("created_by"))
+    lead_status = clean_crm_val(crm.get("lead_status")) or "Open - Not Contacted"
+    designation = clean_crm_val(contact.get("designation"))
+    csr_spend_prev = clean_crm_val(research.get("csr_spend_previous_fy"))
+    edu_csr_spend = clean_crm_val(research.get("education_csr_spend"))
+    unspent_amt = clean_crm_val(research.get("unspent_csr_amount"))
+    industry = clean_crm_val(research.get("industry"))
+    csr_focus = clean_crm_val(research.get("company_csr_focus"))
+    thematic_focus = clean_crm_val(research.get("thematic_focus"))
+    program_dist_state = clean_crm_val(research.get("program_district_state"))
+    lead_tier = clean_crm_val(company_data.get("tier"))
+    score_fitment = clean_crm_val(company_data.get("score"))
+    sources_links = clean_crm_val(research.get("source_url"))
+    avg_ticket = clean_crm_val(research.get("avg_ticket_size"))
+    impl_partners = clean_crm_val(research.get("existing_implementation_partners"))
+    foundation = clean_crm_val(research.get("has_company_foundation"))
+    city = clean_crm_val(research.get("city"))
+    state = clean_crm_val(research.get("state") or research.get("geographical_priority"))
 
-    # Build CSR themes string
-    thematic_focus = research.get("thematic_focus") or []
-    csr_themes = ", ".join(thematic_focus) if thematic_focus else "Not Found"
+    # Decision Maker / Contact details
+    dm_name = clean_crm_val(crm.get("decision_maker_name"))
+    if dm_name:
+        parts = dm_name.split(" ", 1)
+        first_name = parts[0] if len(parts) > 1 else ""
+        last_name = parts[1] if len(parts) > 1 else parts[0]
+    else:
+        first_name = clean_crm_val(contact.get("first_name"))
+        last_name = clean_crm_val(contact.get("last_name")) or company_name
 
-    # Build implementation partners string
-    partners = research.get("existing_implementation_partners") or []
-    impl_partners = ", ".join(partners) if partners else "Not Found"
+    email = clean_crm_val(crm.get("decision_maker_email") or contact.get("email"))
+    phone = clean_crm_val(crm.get("decision_maker_phone") or contact.get("phone"))
+    mobile = clean_crm_val(contact.get("mobile") or phone)
 
-    # Build committee members string with LinkedIn URLs
+    # Committee members summary
     csr_data = company_data.get("csr_data") or {}
     committee_members = csr_data.get("committee_members") or company_data.get("committee_members") or []
     committee_linkedin = company_data.get("committee_members_linkedin") or {}
@@ -45,88 +77,212 @@ def map_to_zoho_lead(company_data: dict) -> dict:
         comm_strs = []
         for m in committee_members:
             li_url = committee_linkedin.get(m)
-            if li_url:
-                comm_strs.append(f"{m} ({li_url})")
-            else:
-                comm_strs.append(m)
+            comm_strs.append(f"{m} ({li_url})" if li_url else str(m))
         comm_members_str = ", ".join(comm_strs)
     else:
-        comm_members_str = "Not Found"
+        comm_members_str = ""
 
-    # Build description with all key research info
-    description_parts = [
-        f"Industry: {research.get('industry', 'Not Found')}",
-        f"CSR Themes: {csr_themes}",
-        f"Geography: {research.get('geographical_priority', 'Not Found')}",
-        f"CSR Focus: {research.get('company_csr_focus', 'Not Found')}",
-        f"Past CSR Programs: {research.get('previous_education_projects', 'Not Found')}",
-        f"Avg Ticket Size: {research.get('avg_ticket_size', 'Not Found')}",
-        f"Program District/State: {research.get('program_district_state', 'Not Found')}",
-        f"Education CSR Spend: {research.get('education_csr_spend', 'Not Found')}",
-        f"CSR Spend (Prev FY): {research.get('csr_spend_previous_fy', 'Not Found')}",
-        f"CSR Spend (3 FY): {research.get('csr_spend_previous_3fy', 'Not Found')}",
-        f"Implementation Partners: {impl_partners}",
-        f"CSR Committee Members: {comm_members_str}",
-        f"Has Company Foundation: {research.get('has_company_foundation', 'Not Found')}",
-        f"Source URL: {research.get('source_url', 'Not Found')}",
-    ]
+    # Extract additional Financial Data
+    fiscal_years = financial_data.get("fiscal_years") or []
+    turnover_dict = financial_data.get("turnover") or {}
+    pbt_dict = financial_data.get("pbt") or {}
+    net_profit_dict = financial_data.get("net_profit") or {}
+    net_worth_dict = financial_data.get("net_worth") or {}
+    prescribed_csr = financial_data.get("prescribed_csr_cr") or financial_data.get("prescribed_csr")
 
-    # Add CRM dashboard fields if present
-    if crm.get("lead_status"):
-        description_parts.append(f"Lead Status: {crm['lead_status']}")
-    if crm.get("next_followup_date") or crm.get("next_followups_date"):
-        followup = crm.get("next_followup_date") or crm.get("next_followups_date")
-        description_parts.append(f"Next Follow-up: {followup}")
-    if crm.get("immediate_action"):
-        description_parts.append(f"Immediate Action: {crm['immediate_action']}")
-    if crm.get("description"):
-        description_parts.append(f"Notes: {crm['description']}")
-    if crm.get("decision_maker_name"):
-        description_parts.append(f"Decision Maker: {crm['decision_maker_name']}")
+    fin_lines = []
+    if fiscal_years:
+        for fy in fiscal_years[:3]:
+            t = turnover_dict.get(fy)
+            np = net_profit_dict.get(fy)
+            p = pbt_dict.get(fy)
+            nw = net_worth_dict.get(fy)
+            fin_entry = []
+            if t is not None:
+                fin_entry.append(f"Turnover: ₹{t:,.2f} Cr" if isinstance(t, (int, float)) else f"Turnover: ₹{t} Cr")
+            if p is not None:
+                fin_entry.append(f"PBT: ₹{p:,.2f} Cr" if isinstance(p, (int, float)) else f"PBT: ₹{p} Cr")
+            if np is not None:
+                fin_entry.append(f"Net Profit: ₹{np:,.2f} Cr" if isinstance(np, (int, float)) else f"Net Profit: ₹{np} Cr")
+            if nw is not None:
+                fin_entry.append(f"Net Worth: ₹{nw:,.2f} Cr" if isinstance(nw, (int, float)) else f"Net Worth: ₹{nw} Cr")
+            if fin_entry:
+                fin_lines.append(f"  • {fy}: {', '.join(fin_entry)}")
+    if prescribed_csr:
+        fin_lines.append(f"  • Prescribed CSR (2% Obligation): ₹{prescribed_csr} Cr")
 
-    def clean(val):
-        """Return empty string if value is None or the literal 'Not Found' / 'Not publicly available'."""
-        if not val or str(val).strip().lower() in ("not found", "none", "n/a", "not publicly available", "-"):
-            return ""
-        return str(val).strip()
+    # Thematic Pillar Flags
+    pillars = []
+    if clean_crm_val(research.get("csr_stem_education")) in ("Yes", "yes"):
+        pillars.append("STEM / Robotics")
+    if clean_crm_val(research.get("csr_school_infra_transformation")) in ("Yes", "yes"):
+        pillars.append("School Infrastructure")
+    if clean_crm_val(research.get("csr_holistic_transformation")) in ("Yes", "yes"):
+        pillars.append("Holistic Transformation")
+    if clean_crm_val(research.get("csr_anganwadi_transformation")) in ("Yes", "yes"):
+        pillars.append("Anganwadi Care")
+    if clean_crm_val(research.get("csr_quality_education")) in ("Yes", "yes"):
+        pillars.append("Quality Education / Literacy")
+    if clean_crm_val(research.get("csr_model_school_transformation")) in ("Yes", "yes"):
+        pillars.append("Model School Upgradation")
 
-    # Determine Lead / Decision Maker Name
-    dm_name = clean(crm.get("decision_maker_name"))
-    if dm_name:
-        parts = dm_name.split(" ", 1)
-        first_name = parts[0] if len(parts) > 1 else ""
-        last_name = parts[1] if len(parts) > 1 else parts[0]
-    else:
-        first_name = clean(contact.get("first_name"))
-        last_name = clean(contact.get("last_name")) or company_data.get("company_name") or "Unknown Company"
+    # AI Intelligence Briefs
+    channel = clean_crm_val(company_data.get("recommended_channel"))
+    warm_angle = clean_crm_val(company_data.get("warm_connect"))
+    brief = clean_crm_val(company_data.get("meeting_brief"))
+    next_follow = clean_crm_val(crm.get("next_followup_date") or crm.get("next_followups_date"))
+    imm_action = clean_crm_val(crm.get("immediate_action"))
+    notes = clean_crm_val(crm.get("description"))
 
-    # Determine Email and Phone
-    email = clean(crm.get("decision_maker_email")) or clean(contact.get("email"))
-    phone = clean(crm.get("decision_maker_phone")) or clean(contact.get("phone")) or clean(contact.get("mobile"))
+    # Comprehensive clean Master Lead Card in Description
+    desc_sections = []
 
+    # 1. Lead Overview
+    sec_lead = ["=== LEAD & FITMENT OVERVIEW ==="]
+    if lead_owner:
+        sec_lead.append(f"Lead Found By: {lead_owner}")
+    if score_fitment:
+        sec_lead.append(f"Fitment Score: {score_fitment}/100 ({lead_tier or 'Unranked'})")
+    if designation:
+        sec_lead.append(f"Decision Maker Designation: {designation}")
+    if industry:
+        sec_lead.append(f"Industry: {industry}")
+    if city or state:
+        sec_lead.append(f"Location: {', '.join(filter(None, [city, state]))}")
+    desc_sections.append("\n".join(sec_lead))
+
+    # 2. CSR & Education Deep Dive
+    sec_csr = ["=== CSR & EDUCATION INTELLIGENCE ==="]
+    if csr_focus:
+        sec_csr.append(f"CSR Philosophy / Focus: {csr_focus}")
+    if thematic_focus:
+        sec_csr.append(f"Thematic Focus: {thematic_focus}")
+    if program_dist_state:
+        sec_csr.append(f"Program Districts & States: {program_dist_state}")
+    if edu_csr_spend:
+        sec_csr.append(f"Education CSR Spend: {edu_csr_spend}")
+    if csr_spend_prev:
+        sec_csr.append(f"Previous Year Total CSR: {csr_spend_prev}")
+    if unspent_amt:
+        sec_csr.append(f"Unspent CSR Amount: {unspent_amt}")
+    if avg_ticket:
+        sec_csr.append(f"Avg Grant / Ticket Size: {avg_ticket}")
+    if impl_partners:
+        sec_csr.append(f"NGO Partners: {impl_partners}")
+    if foundation:
+        sec_csr.append(f"Company Foundation: {foundation}")
+    if pillars:
+        sec_csr.append(f"Supported Education Themes: {', '.join(pillars)}")
+    if comm_members_str:
+        sec_csr.append(f"CSR Committee Members: {comm_members_str}")
+    desc_sections.append("\n".join(sec_csr))
+
+    # 3. Financial Statements
+    if fin_lines:
+        sec_fin = ["=== FINANCIAL METRICS (SCREENER.IN) ==="] + fin_lines
+        desc_sections.append("\n".join(sec_fin))
+
+    # 4. Action & Followup
+    if next_follow or imm_action or notes:
+        sec_act = ["=== OUTREACH & NEXT ACTIONS ==="]
+        if next_follow:
+            sec_act.append(f"Next Follow-up Date: {next_follow}")
+        if imm_action:
+            sec_act.append(f"Immediate Action: {imm_action}")
+        if notes:
+            sec_act.append(f"Notes: {notes}")
+        if channel:
+            sec_act.append(f"Recommended Outreach Channel: {channel}")
+        desc_sections.append("\n".join(sec_act))
+
+    # 5. Brief & Source Links
+    if brief:
+        desc_sections.append(f"=== EXECUTIVE BRIEF ===\n{brief[:1500]}")
+    if sources_links:
+        desc_sections.append(f"=== CITATIONS & SOURCES ===\n{sources_links}")
+
+    full_description = "\n\n".join(desc_sections)
+
+    # Build standard Zoho Lead payload
     payload = {
         "Last_Name": last_name[:80],
-        "Company": (company_data.get("company_name") or "Unknown Company")[:120],
-        "Website": clean(company_data.get("website") or first_source_url(research))[:255],
-        "Industry": clean(research.get("industry"))[:120],
-        "City": clean(research.get("city"))[:100],
-        "State": clean(research.get("state") or research.get("geographical_priority"))[:100],
-        "Country": "India",
-        "Description": "\n".join(description_parts),
-        "Lead_Source": crm.get("lead_source") or "AI Research Agent",
-        "Lead_Status": crm.get("lead_status") or "Open - Not Contacted",
+        "Company": company_name[:120],
+        "Lead_Status": lead_status,
+        "Lead_Source": "AI Research Agent",
+        "Description": full_description,
     }
 
     if first_name:
         payload["First_Name"] = first_name[:40]
+    if designation:
+        payload["Designation"] = designation[:100]
+        payload["Title"] = designation[:100]
+    if website:
+        payload["Website"] = website[:255]
     if email:
         payload["Email"] = email[:100]
     if phone:
         payload["Phone"] = phone[:50]
-        payload["Mobile"] = phone[:50]
+    if mobile:
+        payload["Mobile"] = mobile[:50]
+    if industry:
+        payload["Industry"] = industry[:120]
+    if city:
+        payload["City"] = city[:100]
+    if state:
+        payload["State"] = state[:100]
+    payload["Country"] = "India"
 
-    if annual_revenue is not None:
-        payload["Annual_Revenue"] = annual_revenue
+    # Map custom field keys if defined in user's Zoho CRM layout
+    if lead_tier:
+        payload["Rating"] = lead_tier
+        payload["Lead_Category"] = lead_tier
+        payload["Tier"] = lead_tier
+    if score_fitment:
+        payload["Ennoble_Fitment"] = score_fitment
+        payload["Fitment_Score"] = score_fitment
+    if csr_spend_prev:
+        payload["CSR_Spent_Previous_Year"] = csr_spend_prev
+        payload["CSR_Spend_Previous_Year"] = csr_spend_prev
+    if edu_csr_spend:
+        payload["Education_CSR_Spend"] = edu_csr_spend
+    if unspent_amt:
+        payload["Unspent_Amount"] = unspent_amt
+        payload["Unspent_CSR_Amount"] = unspent_amt
+    if csr_focus:
+        payload["Company_CSR_Focus"] = csr_focus
+    # Multi-select list fields for Zoho CRM (expects jsonarray)
+    thematic_focus_list = []
+    raw_thematic = research.get("thematic_focus")
+    if isinstance(raw_thematic, list):
+        thematic_focus_list = [str(x).strip() for x in raw_thematic if x and str(x).strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
+    elif isinstance(raw_thematic, str) and raw_thematic.strip():
+        thematic_focus_list = [x.strip() for x in raw_thematic.split(",") if x.strip() and x.strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
+
+    if thematic_focus_list:
+        payload["Thematic_Focus"] = thematic_focus_list
+
+    if program_dist_state:
+        payload["Program_District_and_State"] = program_dist_state
+        payload["Program_District_State"] = program_dist_state
+    if avg_ticket:
+        payload["Avg_Ticket_Size"] = avg_ticket
+    if impl_partners:
+        payload["Implementation_Partners"] = impl_partners
+        payload["Name_of_Implementation_Partner"] = impl_partners
+    if foundation:
+        payload["Company_Foundation"] = foundation
+        payload["Do_they_have_company_foundation"] = foundation
+    if sources_links:
+        payload["Lead_Sources"] = sources_links[:255]
+
+    # Latest turnover
+    latest_turnover = turnover_dict.get(fiscal_years[0]) if fiscal_years else None
+    if latest_turnover is not None:
+        try:
+            payload["Annual_Revenue"] = float(latest_turnover)
+        except (ValueError, TypeError):
+            pass
 
     return payload
 

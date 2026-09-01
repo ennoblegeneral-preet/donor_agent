@@ -65,13 +65,8 @@ CSR_KEYWORDS = [
 
 def extract_csr_section_text(pdf_url: str, max_chars: int = 20000) -> str:
     """
-    Poore annual report PDF ke saare pages scan karke CSR-related keywords
-    wale pages ka text nikalta hai (Annexure to Board's Report / CSR section),
-    kyunki ye section usually report ke aakhri hisse mein hota hai.
-
-    STRONG_CSR_KEYWORDS wale pages (asli compliance table) hamesha text ke
-    shuru mein rakhte hain taaki max_chars truncation unhe kabhi na kaate,
-    chahe narrative CSR content kitna bhi lamba kyun na ho.
+    Scans annual report PDF pages for CSR-related keywords and extracts text.
+    Uses ultra-lightweight pypdf streaming to keep memory footprint under 5MB (prevents OOM on Railway).
     """
     cache_key = make_key("csr-pdf", pdf_url, max_chars)
     cached = get_json(cache_key)
@@ -80,23 +75,52 @@ def extract_csr_section_text(pdf_url: str, max_chars: int = 20000) -> str:
         return cached["text"]
 
     try:
-        response = requests.get(pdf_url, headers=_headers_for(pdf_url), timeout=20)
+        # Stream response with max 25MB safety cap to prevent RAM exhaustion
+        response = requests.get(pdf_url, headers=_headers_for(pdf_url), timeout=25, stream=True)
         response.raise_for_status()
 
         content_type = response.headers.get("Content-Type", "")
-        if "pdf" not in content_type.lower():
+        if "pdf" not in content_type.lower() and not pdf_url.lower().endswith(".pdf"):
             raise ValueError(f"Response Content-Type is not PDF: {content_type}")
+
+        # Read at most 25MB of content
+        max_bytes = 25 * 1024 * 1024
+        content_chunks = []
+        total_size = 0
+        for chunk in response.iter_content(chunk_size=128 * 1024):
+            content_chunks.append(chunk)
+            total_size += len(chunk)
+            if total_size >= max_bytes:
+                break
+        pdf_bytes = b"".join(content_chunks)
 
         strong_pages = []
         weak_pages = []
-        with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text() or ""
-                lowered = page_text.lower()
-                if any(keyword in lowered for keyword in STRONG_CSR_KEYWORDS):
-                    strong_pages.append(page_text)
-                elif any(keyword in lowered for keyword in CSR_KEYWORDS):
-                    weak_pages.append(page_text)
+
+        # 1. Try ultra-lightweight pypdf first
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages[:150]:  # Limit to 150 pages max
+                try:
+                    page_text = page.extract_text() or ""
+                    lowered = page_text.lower()
+                    if any(keyword in lowered for keyword in STRONG_CSR_KEYWORDS):
+                        strong_pages.append(page_text)
+                    elif any(keyword in lowered for keyword in CSR_KEYWORDS):
+                        weak_pages.append(page_text)
+                except Exception:
+                    continue
+        except Exception:
+            # 2. Fallback to pdfplumber if pypdf has issues on encrypted streams
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages[:60]:
+                    page_text = page.extract_text() or ""
+                    lowered = page_text.lower()
+                    if any(keyword in lowered for keyword in STRONG_CSR_KEYWORDS):
+                        strong_pages.append(page_text)
+                    elif any(keyword in lowered for keyword in CSR_KEYWORDS):
+                        weak_pages.append(page_text)
 
         combined = "\n".join(strong_pages + weak_pages)
         result_text = combined[:max_chars]
@@ -106,3 +130,4 @@ def extract_csr_section_text(pdf_url: str, max_chars: int = 20000) -> str:
     except Exception as e:
         print(f"[PDF Error] CSR section extraction failed: {e}")
         return ""
+

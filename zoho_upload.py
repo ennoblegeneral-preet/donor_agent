@@ -105,7 +105,7 @@ def upload_company_to_zoho(company_id: str, username: str = None) -> dict:
             update_payload = dict(lead_payload)
             update_payload["id"] = lead_id
             response = requests.put(
-                f"{API_DOMAIN}/crm/v6/Leads",
+                f"{target_api_domain}/crm/v6/Leads",
                 headers=headers,
                 json={"data": [update_payload]},
                 timeout=15,
@@ -124,7 +124,7 @@ def upload_company_to_zoho(company_id: str, username: str = None) -> dict:
     else:
         try:
             response = requests.post(
-                f"{API_DOMAIN}/crm/v6/Leads",
+                f"{target_api_domain}/crm/v6/Leads",
                 headers=headers,
                 json={"data": [lead_payload]},
                 timeout=15,

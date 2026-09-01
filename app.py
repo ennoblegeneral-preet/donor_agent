@@ -116,7 +116,8 @@ MAX_ZOHO_BULK = 50
 # N companies fires N companies' worth of concurrent Tavily searches at once,
 # which blows through Tavily's rate limit even with the per-call semaphore in
 # search_tool.py (that one only caps instantaneous concurrency, not sustained rate).
-_pipeline_concurrency = threading.Semaphore(6)
+_pipeline_concurrency = threading.Semaphore(4)
+
 
 
 def set_pipeline_progress(company_id, stage, message, state="running", percent=0):
@@ -248,7 +249,14 @@ def run_company_pipeline(company_id, company_name, website, username=None):
                 f"({usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion) "
                 f"across {usage['calls']} LLM calls"
             )
+        try:
+            import psutil
+            mem_mb = psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+            print(f"[Memory Usage] Active RAM after '{company_name}': {mem_mb:.2f} MB")
+        except Exception:
+            pass
         _pipeline_concurrency.release()
+
 
 @app.route("/", methods=["GET"])
 @login_required

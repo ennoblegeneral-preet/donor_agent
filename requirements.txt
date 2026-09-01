@@ -9,9 +9,11 @@ redis>=5.0.0
 tavily-python
 groq
 beautifulsoup4
+pypdf
 pdfplumber
 reportlab
 openpyxl
 jinja2
 certifi
 gunicorn
+psutil

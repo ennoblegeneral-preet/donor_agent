@@ -36,18 +36,35 @@ def extract_pdf_text(pdf_url: str) -> str:
         print(f"[PDF Cache] Hit: {pdf_url}")
         return cached["text"]
     try:
-        response = requests.get(pdf_url, headers=_headers_for(pdf_url), timeout=15)
+        response = requests.get(pdf_url, headers=_headers_for(pdf_url), timeout=15, stream=True)
         response.raise_for_status()
-        
-        # Verify it is indeed a PDF
+
         content_type = response.headers.get("Content-Type", "")
-        if "pdf" not in content_type.lower():
+        if "pdf" not in content_type.lower() and not pdf_url.lower().endswith(".pdf"):
             raise ValueError(f"Response Content-Type is not PDF: {content_type}")
-            
-        with pdfplumber.open(io.BytesIO(response.content)) as pdf:
-            text = ""
-            for page in pdf.pages[:10]:  # pehle 10 pages kaafi hain
+
+        # Limit to first 10MB to protect memory
+        max_bytes = 10 * 1024 * 1024
+        chunks = []
+        size = 0
+        for chunk in response.iter_content(chunk_size=128 * 1024):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size >= max_bytes:
+                break
+        raw_bytes = b"".join(chunks)
+
+        text = ""
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+            for page in reader.pages[:15]:
                 text += page.extract_text() or ""
+        except Exception:
+            with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+                for page in pdf.pages[:10]:
+                    text += page.extract_text() or ""
+
         set_json(cache_key, {"text": text})
         return text
     except Exception as e:
