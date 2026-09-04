@@ -1,3 +1,6 @@
+from scoring_agent import parse_crore
+
+
 def first_source_url(research: dict) -> str:
     """`source_url` may hold several URLs joined by ';'. Return only the first valid
     one so it can be safely used as a single link / Website fallback (never the whole
@@ -25,35 +28,55 @@ def clean_crm_val(val):
 
 def map_to_zoho_lead(company_data: dict) -> dict:
     """
-    Maps a MongoDB company record to the Zoho CRM Leads module.
-    Fills all 21 standard + custom fields if available, leaving missing/Not Found fields empty.
+    Maps a MongoDB company record to the Zoho CRM Leads module using the
+    CONFIRMED API names from "DonorIQ x Zoho Fields.xlsx" (Sheet2, "Field api
+    name" column) - a direct 1:1 mapping, not the earlier guessed-alias
+    approach. Whatever real data we have goes through as-is (or parsed to the
+    right type for Currency/Number fields); anything we don't have - missing,
+    "Not Found", "Not publicly available", etc, all normalized to "" by
+    clean_crm_val()/parse_crore() below - is left OUT of the payload entirely
+    rather than sent as literal placeholder text, so Zoho shows those fields
+    genuinely blank instead of full of "Not Found" strings.
     """
     research = company_data.get("research_json") or {}
     crm = company_data.get("crm") or {}
     contact = research.get("contact") or {}
     financial_data = company_data.get("financial_data") or {}
+    program_fitment = company_data.get("program_fitment") or {}
 
-    # Extract clean values for all 21 fields
     company_name = clean_crm_val(company_data.get("company_name")) or "Unknown Company"
     website = clean_crm_val(company_data.get("website") or first_source_url(research))
     lead_owner = clean_crm_val(crm.get("lead_owner") or company_data.get("created_by"))
     lead_status = clean_crm_val(crm.get("lead_status")) or "Open - Not Contacted"
-    designation = clean_crm_val(contact.get("designation"))
-    csr_spend_prev = clean_crm_val(research.get("csr_spend_previous_fy"))
-    edu_csr_spend = clean_crm_val(research.get("education_csr_spend"))
-    unspent_amt = clean_crm_val(research.get("unspent_csr_amount"))
+    designation = clean_crm_val(crm.get("decision_maker_designation") or contact.get("designation") or contact.get("title"))
     industry = clean_crm_val(research.get("industry"))
     csr_focus = clean_crm_val(research.get("company_csr_focus"))
-    thematic_focus = clean_crm_val(research.get("thematic_focus"))
+    prev_projects_edu = clean_crm_val(research.get("previous_education_projects"))
     program_dist_state = clean_crm_val(research.get("program_district_state"))
+    social_lead_id = clean_crm_val(company_data.get("id_str") or str(company_data.get("_id", "")))
     lead_tier = clean_crm_val(company_data.get("tier"))
     score_fitment = clean_crm_val(company_data.get("score"))
-    sources_links = clean_crm_val(research.get("source_url"))
-    avg_ticket = clean_crm_val(research.get("avg_ticket_size"))
-    impl_partners = clean_crm_val(research.get("existing_implementation_partners"))
+    # "Ennoble Fitment" is the strongest of the 6 program fits (High/Medium/Low
+    # Fit/Not Evident), computed in scoring_agent.py and stored under
+    # program_fitment - NOT the 0-100 numeric score (that has no confirmed
+    # Zoho field yet, so it only appears in the Description text below).
+    ennoble_fitment_label = clean_crm_val(program_fitment.get("Ennoble Fitment"))
+    lead_source = clean_crm_val(crm.get("lead_source")) or "AI Research Agent"
     foundation = clean_crm_val(research.get("has_company_foundation"))
+    duration_past = clean_crm_val(research.get("duration_past_projects"))
+    immediate_action = clean_crm_val(crm.get("immediate_action"))
+    agency = "Ennoble Social Innovation"
+    sources_links = clean_crm_val(research.get("source_url"))
+
+    # Location
     city = clean_crm_val(research.get("city"))
     state = clean_crm_val(research.get("state") or research.get("geographical_priority"))
+    street = clean_crm_val(research.get("street") or research.get("address"))
+    zip_code = clean_crm_val(research.get("pincode") or research.get("zip_code"))
+    country = "India"
+
+    # Priority determination based on Tier
+    priority = "High" if lead_tier == "Tier A" else ("Medium" if lead_tier == "Tier B" else "Low")
 
     # Decision Maker / Contact details
     dm_name = clean_crm_val(crm.get("decision_maker_name"))
@@ -66,8 +89,20 @@ def map_to_zoho_lead(company_data: dict) -> dict:
         last_name = clean_crm_val(contact.get("last_name")) or company_name
 
     email = clean_crm_val(crm.get("decision_maker_email") or contact.get("email"))
+    sec_email = clean_crm_val(contact.get("secondary_email"))
     phone = clean_crm_val(crm.get("decision_maker_phone") or contact.get("phone"))
     mobile = clean_crm_val(contact.get("mobile") or phone)
+    landline = clean_crm_val(contact.get("landline") or phone)
+
+    # Implementation partners breakdown (Count + Names)
+    raw_partners = research.get("existing_implementation_partners") or []
+    partners_list = []
+    if isinstance(raw_partners, list):
+        partners_list = [str(x).strip() for x in raw_partners if x and str(x).strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-")]
+    elif isinstance(raw_partners, str) and raw_partners.strip():
+        partners_list = [x.strip() for x in raw_partners.split(",") if x.strip() and x.strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-")]
+    partners_count = len(partners_list) if partners_list else None
+    partners_names_str = ", ".join(partners_list) if partners_list else ""
 
     # Committee members summary
     csr_data = company_data.get("csr_data") or {}
@@ -82,7 +117,36 @@ def map_to_zoho_lead(company_data: dict) -> dict:
     else:
         comm_members_str = ""
 
-    # Extract additional Financial Data
+    # Thematic Focus - Zoho's Thematic_Focus field takes a list (jsonarray)
+    thematic_focus_list = []
+    raw_thematic = research.get("thematic_focus")
+    if isinstance(raw_thematic, list):
+        thematic_focus_list = [str(x).strip() for x in raw_thematic if x and str(x).strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
+    elif isinstance(raw_thematic, str) and raw_thematic.strip():
+        thematic_focus_list = [x.strip() for x in raw_thematic.split(",") if x.strip() and x.strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
+    thematic_focus_display = ", ".join(thematic_focus_list)
+
+    # Currency/Number fields - Zoho expects real numbers here, not free text
+    # like "Rs 19.2 Cr (FY24)" (confirmed live: sending unparseable text into a
+    # Number/Currency field raises an INVALID_DATA error). parse_crore()
+    # extracts the number in crore, or returns None if it can't - in which case
+    # the field is simply left out of the payload rather than guessed at. The
+    # original free text is kept separately for the Description block, where a
+    # human-readable range like "Rs 50L-2Cr depending on scope" is more useful
+    # than a single lossily-parsed number.
+    csr_spend_prev_txt = clean_crm_val(research.get("csr_spend_previous_fy"))
+    csr_spend_3fy_txt = clean_crm_val(research.get("csr_spend_previous_3fy"))
+    edu_csr_spend_txt = clean_crm_val(research.get("education_csr_spend"))
+    unspent_amt_txt = clean_crm_val(research.get("unspent_csr_amount"))
+    avg_ticket_txt = clean_crm_val(research.get("avg_ticket_size"))
+
+    csr_spend_prev_num = parse_crore(research.get("csr_spend_previous_fy"))
+    csr_spend_3fy_num = parse_crore(research.get("csr_spend_previous_3fy"))
+    edu_csr_spend_num = parse_crore(research.get("education_csr_spend"))
+    unspent_amt_num = parse_crore(research.get("unspent_csr_amount"))
+    avg_ticket_num = parse_crore(research.get("avg_ticket_size"))
+
+    # Financial Data 4-Year Series & CSR Min / Max calculations
     fiscal_years = financial_data.get("fiscal_years") or []
     turnover_dict = financial_data.get("turnover") or {}
     pbt_dict = financial_data.get("pbt") or {}
@@ -90,251 +154,194 @@ def map_to_zoho_lead(company_data: dict) -> dict:
     net_worth_dict = financial_data.get("net_worth") or {}
     prescribed_csr = financial_data.get("prescribed_csr_cr") or financial_data.get("prescribed_csr")
 
-    fin_lines = []
-    if fiscal_years:
-        for fy in fiscal_years[:3]:
-            t = turnover_dict.get(fy)
-            np = net_profit_dict.get(fy)
-            p = pbt_dict.get(fy)
-            nw = net_worth_dict.get(fy)
-            fin_entry = []
-            if t is not None:
-                fin_entry.append(f"Turnover: ₹{t:,.2f} Cr" if isinstance(t, (int, float)) else f"Turnover: ₹{t} Cr")
-            if p is not None:
-                fin_entry.append(f"PBT: ₹{p:,.2f} Cr" if isinstance(p, (int, float)) else f"PBT: ₹{p} Cr")
-            if np is not None:
-                fin_entry.append(f"Net Profit: ₹{np:,.2f} Cr" if isinstance(np, (int, float)) else f"Net Profit: ₹{np} Cr")
-            if nw is not None:
-                fin_entry.append(f"Net Worth: ₹{nw:,.2f} Cr" if isinstance(nw, (int, float)) else f"Net Worth: ₹{nw} Cr")
-            if fin_entry:
-                fin_lines.append(f"  • {fy}: {', '.join(fin_entry)}")
-    if prescribed_csr:
-        fin_lines.append(f"  • Prescribed CSR (2% Obligation): ₹{prescribed_csr} Cr")
+    def _format_4yr_series(metric_dict):
+        parts = []
+        for fy in fiscal_years[:4]:
+            val = metric_dict.get(fy)
+            if val is not None:
+                parts.append(f"{fy}: ₹{val:,.2f} Cr" if isinstance(val, (int, float)) else f"{fy}: ₹{val} Cr")
+        return " | ".join(parts)
 
-    # Thematic Pillar Flags
-    pillars = []
-    if clean_crm_val(research.get("csr_stem_education")) in ("Yes", "yes"):
-        pillars.append("STEM / Robotics")
-    if clean_crm_val(research.get("csr_school_infra_transformation")) in ("Yes", "yes"):
-        pillars.append("School Infrastructure")
-    if clean_crm_val(research.get("csr_holistic_transformation")) in ("Yes", "yes"):
-        pillars.append("Holistic Transformation")
-    if clean_crm_val(research.get("csr_anganwadi_transformation")) in ("Yes", "yes"):
-        pillars.append("Anganwadi Care")
-    if clean_crm_val(research.get("csr_quality_education")) in ("Yes", "yes"):
-        pillars.append("Quality Education / Literacy")
-    if clean_crm_val(research.get("csr_model_school_transformation")) in ("Yes", "yes"):
-        pillars.append("Model School Upgradation")
+    turnover_4yr_str = _format_4yr_series(turnover_dict)
+    pbt_4yr_str = _format_4yr_series(pbt_dict)
+    net_profit_4yr_str = _format_4yr_series(net_profit_dict)
+    net_worth_4yr_str = _format_4yr_series(net_worth_dict)
 
-    # AI Intelligence Briefs
-    channel = clean_crm_val(company_data.get("recommended_channel"))
-    warm_angle = clean_crm_val(company_data.get("warm_connect"))
-    brief = clean_crm_val(company_data.get("meeting_brief"))
-    next_follow = clean_crm_val(crm.get("next_followup_date") or crm.get("next_followups_date"))
-    imm_action = clean_crm_val(crm.get("immediate_action"))
-    notes = clean_crm_val(crm.get("description"))
+    # CSR Maximum (2% of 3-year avg PBT)
+    pbt_vals = [pbt_dict[fy] for fy in fiscal_years[:3] if isinstance(pbt_dict.get(fy), (int, float))]
+    csr_max_str = ""
+    if pbt_vals:
+        avg_pbt = sum(pbt_vals) / len(pbt_vals)
+        csr_max_val = avg_pbt * 0.02
+        csr_max_str = f"₹{csr_max_val:,.2f} Cr" if csr_max_val > 0 else ""
 
-    # Comprehensive clean Master Lead Card in Description
+    # CSR Minimum (2% of 3-year avg Net Profit / Prescribed CSR)
+    np_vals = [net_profit_dict[fy] for fy in fiscal_years[:3] if isinstance(net_profit_dict.get(fy), (int, float))]
+    csr_min_str = ""
+    if np_vals:
+        avg_np = sum(np_vals) / len(np_vals)
+        csr_min_val = avg_np * 0.02
+        csr_min_str = f"₹{csr_min_val:,.2f} Cr" if csr_min_val > 0 else ""
+    elif prescribed_csr:
+        csr_min_str = f"₹{prescribed_csr} Cr" if isinstance(prescribed_csr, (int, float)) else str(prescribed_csr)
+
+    # Build comprehensive description
     desc_sections = []
-
-    # 1. Lead Overview
     sec_lead = ["=== LEAD & FITMENT OVERVIEW ==="]
-    if lead_owner:
-        sec_lead.append(f"Lead Found By: {lead_owner}")
-    if score_fitment:
-        sec_lead.append(f"Fitment Score: {score_fitment}/100 ({lead_tier or 'Unranked'})")
-    if designation:
-        sec_lead.append(f"Decision Maker Designation: {designation}")
-    if industry:
-        sec_lead.append(f"Industry: {industry}")
-    if city or state:
-        sec_lead.append(f"Location: {', '.join(filter(None, [city, state]))}")
+    if lead_owner: sec_lead.append(f"Lead Found By: {lead_owner}")
+    if score_fitment: sec_lead.append(f"Fitment Score: {score_fitment}/100 ({lead_tier or 'Unranked'})")
+    if designation: sec_lead.append(f"Decision Maker Designation: {designation}")
+    if industry: sec_lead.append(f"Industry: {industry}")
+    if city or state: sec_lead.append(f"Location: {', '.join(filter(None, [city, state]))}")
     desc_sections.append("\n".join(sec_lead))
 
-    # 2. CSR & Education Deep Dive
     sec_csr = ["=== CSR & EDUCATION INTELLIGENCE ==="]
-    if csr_focus:
-        sec_csr.append(f"CSR Philosophy / Focus: {csr_focus}")
-    if thematic_focus:
-        sec_csr.append(f"Thematic Focus: {thematic_focus}")
-    if program_dist_state:
-        sec_csr.append(f"Program Districts & States: {program_dist_state}")
-    if edu_csr_spend:
-        sec_csr.append(f"Education CSR Spend: {edu_csr_spend}")
-    if csr_spend_prev:
-        sec_csr.append(f"Previous Year Total CSR: {csr_spend_prev}")
-    if unspent_amt:
-        sec_csr.append(f"Unspent CSR Amount: {unspent_amt}")
-    if avg_ticket:
-        sec_csr.append(f"Avg Grant / Ticket Size: {avg_ticket}")
-    if impl_partners:
-        sec_csr.append(f"NGO Partners: {impl_partners}")
-    if foundation:
-        sec_csr.append(f"Company Foundation: {foundation}")
-    if pillars:
-        sec_csr.append(f"Supported Education Themes: {', '.join(pillars)}")
-    if comm_members_str:
-        sec_csr.append(f"CSR Committee Members: {comm_members_str}")
+    if csr_focus: sec_csr.append(f"CSR Philosophy / Focus: {csr_focus}")
+    if thematic_focus_display: sec_csr.append(f"Thematic Focus: {thematic_focus_display}")
+    if program_dist_state: sec_csr.append(f"Program Districts & States: {program_dist_state}")
+    if edu_csr_spend_txt: sec_csr.append(f"Education CSR Spend: {edu_csr_spend_txt}")
+    if csr_spend_prev_txt: sec_csr.append(f"Previous Year Total CSR: {csr_spend_prev_txt}")
+    if csr_spend_3fy_txt: sec_csr.append(f"Past 3 Years CSR Spend: {csr_spend_3fy_txt}")
+    if unspent_amt_txt: sec_csr.append(f"Unspent CSR Amount: {unspent_amt_txt}")
+    if avg_ticket_txt: sec_csr.append(f"Avg Grant / Ticket Size: {avg_ticket_txt}")
+    if partners_names_str: sec_csr.append(f"NGO Partners: {partners_names_str}")
+    if foundation: sec_csr.append(f"Company Foundation: {foundation}")
+    if comm_members_str: sec_csr.append(f"CSR Committee Members: {comm_members_str}")
     desc_sections.append("\n".join(sec_csr))
 
-    # 3. Financial Statements
+    fin_lines = []
+    if turnover_4yr_str: fin_lines.append(f"  • Annual Turnover: {turnover_4yr_str}")
+    if pbt_4yr_str: fin_lines.append(f"  • PBT: {pbt_4yr_str}")
+    if net_profit_4yr_str: fin_lines.append(f"  • Net Profit: {net_profit_4yr_str}")
+    if net_worth_4yr_str: fin_lines.append(f"  • Net Worth: {net_worth_4yr_str}")
+    if csr_max_str: fin_lines.append(f"  • CSR Maximum (2% of PBT): {csr_max_str}")
+    if csr_min_str: fin_lines.append(f"  • CSR Minimum (2% of Net Profit): {csr_min_str}")
     if fin_lines:
-        sec_fin = ["=== FINANCIAL METRICS (SCREENER.IN) ==="] + fin_lines
-        desc_sections.append("\n".join(sec_fin))
+        desc_sections.append("=== FINANCIAL METRICS (SCREENER.IN) ===\n" + "\n".join(fin_lines))
 
-    # 4. Action & Followup
-    if next_follow or imm_action or notes:
-        sec_act = ["=== OUTREACH & NEXT ACTIONS ==="]
-        if next_follow:
-            sec_act.append(f"Next Follow-up Date: {next_follow}")
-        if imm_action:
-            sec_act.append(f"Immediate Action: {imm_action}")
-        if notes:
-            sec_act.append(f"Notes: {notes}")
-        if channel:
-            sec_act.append(f"Recommended Outreach Channel: {channel}")
-        desc_sections.append("\n".join(sec_act))
-
-    # 5. Brief & Source Links
-    if brief:
-        desc_sections.append(f"=== EXECUTIVE BRIEF ===\n{brief[:1500]}")
     if sources_links:
         desc_sections.append(f"=== CITATIONS & SOURCES ===\n{sources_links}")
 
     full_description = "\n\n".join(desc_sections)
 
-    # Build standard Zoho Lead payload
+    # BUILD THE ZOHO LEADS PAYLOAD - one key per field, using ONLY the API
+    # names confirmed in DonorIQ x Zoho Fields.xlsx (Sheet2, "Field api name").
+    # No more guessed aliases: every key below is either a confirmed API name,
+    # or (for the still-unconfirmed "ADD-ON ASKS" rows 40-46: annual turnover,
+    # PBT, net profit, net worth, CSR max/min, geography fit check) omitted
+    # from the payload entirely and folded into the Description text instead,
+    # so nothing sends to a field name that might not exist or might be the
+    # wrong data type.
     payload = {
-        "Last_Name": last_name[:80],
-        "Company": company_name[:120],
-        "Lead_Status": lead_status,
-        "Lead_Source": "AI Research Agent",
-        "Description": full_description,
+        # 1. Lead Owner (Owner) - deliberately NOT sent. Confirmed live: Zoho's
+        # Owner field expects a numeric Zoho user id (bigint), not a plain
+        # username/email string, and rejects the WHOLE Lead if it gets one.
+        # We don't yet have a mapping from app usernames to real Zoho user
+        # ids, so omitting it leaves the lead unassigned (or defaults to the
+        # uploading API token's user) rather than blocking every upload.
+        # "Lead Found By" is still visible in the Description text below.
+        "Company": company_name[:120],                     # 2. Company
+        "Website": website[:255],                          # 3. Website
+        "Lead_Status": lead_status,                         # 4. Lead Status
+        "Designation_3": designation[:100],                 # 5. Designation.
+        "Industry": industry[:120],                         # 10. Industry
+        "Program_State": program_dist_state,                # 14. Program District & State
+        "leadchain0__Social_Lead_ID": social_lead_id,       # 15. Social Lead ID
+        "First_Name": first_name[:40],                      # 16. First Name
+        "Last_Name": last_name[:80],                        # 17. Last Name
+        "Lead_Source": lead_source,                         # 19. Lead Source
+        "Phone": phone[:50],                                # 20. Phone
+        "Mobile": mobile[:50],                              # 21. Mobile
+        "Email": email[:100],                               # 22. Email
+        "Secondary_Email": sec_email[:100],                 # 23. Secondary Email
+        "Office_Landline": landline[:50],                   # 24. Office Landline
+        "Priority": priority,                               # 25. Priority
+        # 26. Enoble Fitment - confirmed multi-select picklist in Zoho (same
+        # jsonarray requirement as Lead_SourceCategory), set separately below.
+        "Duration_of_Past_Projects": duration_past,          # 27. Duration of Past Projects
+        "Immediate_Action": immediate_action,                # 28. Immediate Action
+        "Agency": agency,                                   # 29. Agency
+        "Do_they_Have_Company_Foundation": foundation,       # 33. Do they Have Company Foundation
+        "Street": street[:255],                             # 34. Street
+        "State": state[:100],                               # 35. State
+        "City": city[:100],                                 # 36. City
+        "Country": country,                                 # 37. Country
+        "Zip_Code": zip_code[:20],                          # 38. Zip Code
+        "Description": full_description,                    # 39. Description
     }
 
-    if first_name:
-        payload["First_Name"] = first_name[:40]
-    if designation:
-        payload["Designation"] = designation[:100]
-        payload["Title"] = designation[:100]
-    if website:
-        payload["Website"] = website[:255]
-    if email:
-        payload["Email"] = email[:100]
-    if phone:
-        payload["Phone"] = phone[:50]
-    if mobile:
-        payload["Mobile"] = mobile[:50]
-    if industry:
-        payload["Industry"] = industry[:120]
-    if city:
-        payload["City"] = city[:100]
-    if state:
-        payload["State"] = state[:100]
-    payload["Country"] = "India"
-
-    # Standard + Custom Company Name & Industry Keys
-    if company_name:
-        payload["Company"] = company_name[:120]
-        payload["Company_Name"] = company_name[:120]
-    if industry:
-        payload["Industry"] = industry[:120]
-        payload["industry_1"] = industry[:120]
-        payload["Industry_1"] = industry[:120]
-
-    # Map custom field keys if defined in user's Zoho CRM layout
+    # 18. Lead SourceCategory - confirmed multi-select picklist in Zoho (a live
+    # upload error showed it expects a JSON array, not a plain string).
     if lead_tier:
-        payload["Rating"] = lead_tier
-        payload["Lead_Category"] = lead_tier
-        payload["Tier"] = lead_tier
-    if score_fitment:
-        payload["Ennoble_Fitment"] = score_fitment
-        payload["Fitment_Score"] = score_fitment
-    if csr_spend_prev:
-        payload["CSR_Spent_Previous_Year"] = csr_spend_prev
-        payload["CSR_Spend_Previous_Year"] = csr_spend_prev
-    if edu_csr_spend:
-        payload["Education_CSR_Spend"] = edu_csr_spend
-    if unspent_amt:
-        payload["Unspent_Amount"] = unspent_amt
-        payload["Unspent_CSR_Amount"] = unspent_amt
-    if csr_focus:
-        payload["Company_CSR_Focus"] = csr_focus
-    # Multi-select list fields for Zoho CRM (expects jsonarray)
-    thematic_focus_list = []
-    raw_thematic = research.get("thematic_focus")
-    if isinstance(raw_thematic, list):
-        thematic_focus_list = [str(x).strip() for x in raw_thematic if x and str(x).strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
-    elif isinstance(raw_thematic, str) and raw_thematic.strip():
-        thematic_focus_list = [x.strip() for x in raw_thematic.split(",") if x.strip() and x.strip().lower() not in ("not found", "none", "n/a", "not publicly available", "-", "null")]
+        payload["Lead_SourceCategory"] = [lead_tier]
 
+    # 26. Enoble Fitment - also confirmed multi-select picklist (same
+    # jsonarray requirement, confirmed by a live INVALID_DATA error).
+    if ennoble_fitment_label:
+        payload["Enoble_Fitment"] = [ennoble_fitment_label]
+
+    # 11. Company CSR Focus - capped at 120 chars in Zoho (confirmed live -
+    # exceeding it rejects the WHOLE Lead record, not just this field).
+    if csr_focus:
+        payload["Company_CSR_Focus"] = csr_focus[:120]
+
+    # 12. Thematic Focus - Zoho field takes a list (jsonarray)
     if thematic_focus_list:
         payload["Thematic_Focus"] = thematic_focus_list
 
-    if program_dist_state:
-        payload["Program_District_and_State"] = program_dist_state
-        payload["Program_District_State"] = program_dist_state
-    if avg_ticket:
-        payload["Avg_Ticket_Size"] = avg_ticket
-    if impl_partners:
-        payload["Implementation_Partners"] = impl_partners
-        payload["Name_of_Implementation_Partner"] = impl_partners
-    if foundation:
-        payload["Company_Foundation"] = foundation
-        payload["Do_they_have_company_foundation"] = foundation
-    if sources_links:
-        payload["Lead_Sources"] = sources_links[:255]
+    # 13. Previous Projects on Education
+    if prev_projects_edu:
+        payload["Previous_Projects_on_Education"] = prev_projects_edu
 
-    # Map Financial Data Fields (Annual Turnover, PBT, Net Profit, Networth, Prescribed CSR)
-    latest_fy = fiscal_years[0] if fiscal_years else None
-    latest_turnover = turnover_dict.get(latest_fy) if latest_fy else None
-    latest_pbt = pbt_dict.get(latest_fy) if latest_fy else None
-    latest_net_profit = net_profit_dict.get(latest_fy) if latest_fy else None
-    latest_net_worth = net_worth_dict.get(latest_fy) if latest_fy else None
+    # 31. No. of Existing Implementation Partners (Number field - already an int)
+    if partners_count is not None:
+        payload["No_of_Existing_Implementation_Partners1"] = partners_count
 
-    # Annual Turnover
-    if latest_turnover is not None:
-        try:
-            payload["Annual_Revenue"] = float(latest_turnover)
-        except (ValueError, TypeError):
-            pass
-        val_str = f"₹{latest_turnover:,.2f} Cr" if isinstance(latest_turnover, (int, float)) else str(latest_turnover)
-        payload["annual_turnover"] = val_str
-        payload["Annual_Turnover"] = val_str
-        payload["Turnover"] = val_str
+    # 32. Names of Existing Implementation Partners
+    if partners_names_str:
+        payload["Names_of_Existing_Implementation_Partners"] = partners_names_str
 
-    # PBT (Profit Before Tax)
-    if latest_pbt is not None:
-        val_str = f"₹{latest_pbt:,.2f} Cr" if isinstance(latest_pbt, (int, float)) else str(latest_pbt)
-        payload["pbt"] = val_str
-        payload["PBT"] = val_str
-        payload["Profit_Before_Tax"] = val_str
+    # 6-9, 30. Currency/Number fields - only sent when parse_crore() could
+    # extract a real number; unparseable text (a range, a vague description)
+    # stays out of these fields but is still visible in the Description above.
+    if csr_spend_prev_num is not None:
+        payload["CSR_Spent_of_Previous_Financial_Year1"] = csr_spend_prev_num
+    if csr_spend_3fy_num is not None:
+        payload["CSR_Spent_of_Previous_3_Financial_Year1"] = csr_spend_3fy_num
+    if edu_csr_spend_num is not None:
+        payload["Education_CSR_Spend1"] = edu_csr_spend_num
+    if unspent_amt_num is not None:
+        payload["Unspent_CSR_Amount"] = unspent_amt_num
+    if avg_ticket_num is not None:
+        payload["Avg_Ticket_Size_for_Project_Approved1"] = avg_ticket_num
 
-    # Net Profit
-    if latest_net_profit is not None:
-        val_str = f"₹{latest_net_profit:,.2f} Cr" if isinstance(latest_net_profit, (int, float)) else str(latest_net_profit)
-        payload["net_profit"] = val_str
-        payload["Net_Profit"] = val_str
-        payload["Profit_After_Tax"] = val_str
+    # Rows 40-46 (annual turnover, pbt, net profit, net worth, CSR max/min,
+    # geography fit check) intentionally NOT mapped yet - waiting on the real
+    # confirmed API names before wiring them in permanently. That data still
+    # shows up in the Description text block above in the meantime.
 
-    # Networth
-    if latest_net_worth is not None:
-        val_str = f"₹{latest_net_worth:,.2f} Cr" if isinstance(latest_net_worth, (int, float)) else str(latest_net_worth)
-        payload["networth"] = val_str
-        payload["Networth"] = val_str
-        payload["Net_Worth"] = val_str
+    # Description is Long Text in Zoho (much higher limit) - never truncate it.
+    _UNCAPPED_FIELDS = {"Description"}
+    # Zoho rejects the ENTIRE Lead record if even one single-line/picklist field
+    # exceeds its configured max length (confirmed live: Company_CSR_Focus at
+    # 120 chars). Every field above with a known limit is already explicitly
+    # sized; this is a safety net for the rest.
+    _SAFE_DEFAULT_MAX_LEN = 120
 
-    # Minimum CSR Spend for the Financial Year (Prescribed CSR Obligation)
-    csr_budget_val = prescribed_csr or csr_spend_prev
-    if csr_budget_val:
-        val_str = f"₹{csr_budget_val} Cr" if isinstance(csr_budget_val, (int, float)) else str(csr_budget_val)
-        payload["minimum_csr_spenf_for_the_financial_year"] = val_str
-        payload["Minimum_CSR_Spenf_for_the_Financial_Year"] = val_str
-        payload["minimum_csr_spend_for_the_financial_year"] = val_str
-        payload["Minimum_CSR_Spend_for_the_Financial_Year"] = val_str
-        payload["Prescribed_CSR"] = val_str
+    # Clean payload: whatever we have goes through as-is; whatever we don't
+    # have (None, "", or anything clean_crm_val()/parse_crore() already
+    # normalized away - "Not Found", "Not publicly available", etc.) is left
+    # out of the payload entirely, so Zoho shows those fields genuinely blank
+    # instead of full of placeholder text.
+    cleaned_payload = {}
+    for k, v in payload.items():
+        if v is None or v == "":
+            continue
+        if isinstance(v, str) and k not in _UNCAPPED_FIELDS and len(v) > _SAFE_DEFAULT_MAX_LEN:
+            v = v[:_SAFE_DEFAULT_MAX_LEN]
+        cleaned_payload[k] = v
 
-    return payload
+    return cleaned_payload
 
 
 def map_to_zoho_contact(contact_data: dict, account_name: str, account_id: str = None) -> dict:
