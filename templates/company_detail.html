@@ -124,6 +124,12 @@
                 <strong>Program District/State:</strong>
                 <span>{{ research.get('program_district_state', '-') if research else '-' }}</span>
             </div>
+            {#
+            Commented out per request: these fields render "Not Found" / "Not
+            publicly available" too often to be useful in the dashboard - the
+            same data (when it IS found) still shows further down in the
+            dedicated "CSR Data"/"Education CSR Spend" panels below, which are
+            already conditional on real data being present.
             <div class="detail-field">
                 <strong>Education CSR Spend:</strong>
                 <span>{{ research.get('education_csr_spend', '-') if research else '-' }}</span>
@@ -161,6 +167,7 @@
                     {% endif %}
                 </span>
             </div>
+            #}
             <div class="detail-field full-width">
                 <strong>Source URL:</strong>
                 {% set source_urls = (research.get('source_url', '') if research else '').split(';') %}
