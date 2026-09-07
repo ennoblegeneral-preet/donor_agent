@@ -7,12 +7,13 @@ from audit_logger import log_action
 from fitment_agents import decide_record_stage
 from error_utils import classify_error
 from llm_service import call_llm_safe
+from geography_config import find_priority_geography_matches
 load_dotenv()
 
 WEIGHTS = {
-    "education_focus": 30,
-    "spend_capacity": 30,
-    "geography_match": 20,
+    "education_focus": 35,
+    "spend_capacity": 35,
+    "geography_match": 10,
     "strategic_fit": 20,
     "decision_maker_access": 0,
     "urgency_signal": 0,
@@ -21,12 +22,21 @@ WEIGHTS = {
 }
 
 
-# WEIGHTS_NO_FINANCIALS = {
-#     "education_focus": 60,   # Absorbs spend_capacity weight
-#     "spend_capacity": 0,
-#     "geography_match": 20,
-#     "strategic_fit": 20,
-# }
+# Used instead of WEIGHTS when no financial data was found at all (Screener
+# lookup failed / unlisted company with no usable filings) - spend_capacity
+# can't be judged from real numbers OR meaningfully guessed from text in that
+# case, so its 30 points are handed to education_focus instead of silently
+# scoring the company on a guess. Geography and strategic fit are unaffected.
+WEIGHTS_NO_FINANCIALS = {
+    "education_focus": 60,   # Absorbs spend_capacity weight
+    "spend_capacity": 0,
+    "geography_match": 20,
+    "strategic_fit": 20,
+    "decision_maker_access": 0,
+    "urgency_signal": 0,
+    "governance_quality": 0,
+    "warm_connection": 0,
+}
 
 PROGRAMS = [
     "STEM Education",
@@ -51,7 +61,7 @@ STRICT GROUNDING RULES:
 - Base every rating and fitment strictly on the research data provided below. Do not guess.
 - If data for a factor is "Not Found" or missing, rate 0.0-0.2 and state so in the reason (e.g. "No spend data found").
 - Only rate above 0.5 if the data explicitly supports it.
-- Geography match rule: High (3+ states/pan-India) -> 0.8-1.0; Medium (2 states) -> 0.4-0.6; Low/empty -> 0.0-0.2.
+- Geography match rule: High (confirmed operating in at least 1 state/region, or pan-India) -> 0.8-1.0; Medium (a city/location is mentioned but the state/region of operation is unclear) -> 0.4-0.6; Low/empty -> 0.0-0.2.
 - Program Fitment: Mark High Fit, Medium Fit, Low Fit, or Not Evident for each program.
 
 Research Data:
@@ -241,9 +251,10 @@ Return ONLY JSON in this format:
     return data, None
 
 
-def calculate_final_score(ratings: dict) -> int:
+def calculate_final_score(ratings: dict, weights: dict = None) -> int:
+    weights = weights or WEIGHTS
     total = 0
-    for factor, weight in WEIGHTS.items():
+    for factor, weight in weights.items():
         rating = ratings.get(factor, {}).get("rating", 0)
         total += rating * weight
     return round(total)
@@ -252,7 +263,7 @@ def calculate_final_score(ratings: dict) -> int:
 import re
 
 # Ordering used to pick the single strongest program fit (prompt: "Ennoble Fitment").
-_FIT_RANK = {"High Fit": 3, "Medium Fit": 2, "Low Fit": 1, "Not Evident": 0}
+_FIT_RANK = {"High Fit": 4, "Medium Fit": 2, "Low Fit": 1, "Not Evident": 0}
 
 
 def parse_crore(value: str):
@@ -336,6 +347,29 @@ def score_company(company_id: str):
                       "qualitative signal.",
         }
 
+    # Hard geography override: a company found operating in ANY of Ennoble's own
+    # priority geographies (geography_config.py) is a strong match regardless of
+    # how many states the LLM thinks it spans - these are OUR target regions, not
+    # a generic "how spread out is this company" measure. When no priority
+    # geography is found in the research text, the LLM's own "3+ states -> High"
+    # judgment stands as a fallback rather than being forced down to Low, since
+    # absence from this list isn't proof there's no relevant footprint at all.
+    geo_search_text = " ".join(str(part) for part in [
+        research.get("city", ""),
+        research.get("state", ""),
+        research.get("program_district_state", ""),
+        research.get("company_csr_focus", ""),
+        " ".join(research.get("thematic_focus", []) or []),
+        research.get("previous_education_projects", ""),
+    ] if part)
+    priority_geo_matches = find_priority_geography_matches(geo_search_text)
+    if priority_geo_matches:
+        ratings = dict(ratings)
+        ratings["geography_match"] = {
+            "rating": 1.0,
+            "reason": "Matches Ennoble's priority geography list: " + ", ".join(priority_geo_matches) + ".",
+        }
+
     # # CSR capacity gate: comment out this block when this rule is not needed.
     # # Both the PBT-based and Net-Profit-based 2% CSR capacity calculations must
     # # be at least Rs 3 Cr for the company to receive spend-capacity points.
@@ -360,13 +394,25 @@ def score_company(company_id: str):
     #         "reason": "Both PBT-based and Net-Profit-based CSR capacity calculations are at least Rs 3 Cr.",
     #     }
 
+    # When no financial data was found at all (Screener lookup failed / genuinely
+    # unlisted company with no usable filings), spend_capacity can't be judged
+    # from real numbers, and a text-based guess for it is unreliable - so the
+    # decision leans on education evidence instead: switch to
+    # WEIGHTS_NO_FINANCIALS, which hands spend_capacity's 30 points to
+    # education_focus rather than scoring the company on a guess. A company
+    # whose financials WERE found (even if they miss the prospect thresholds)
+    # still uses the standard WEIGHTS - that's a real "not big enough" signal,
+    # not missing data.
+    financial_data_missing = not (company.get("financial_data") or {}).get("fiscal_years")
+    weights_used = WEIGHTS_NO_FINANCIALS if financial_data_missing else WEIGHTS
+
     # Weighted 0-100 score; ye ab tier (A/B/C) bhi decide karta hai.
     # NOTE: agar ratings_error set hai (jaise LLM rate-limited), to ratings={} aur
     # final_score 0 aa sakta hai - jo ek REAL 0-score se distinguish nahi hota
     # sirf final_score dekh ke. Isliye ye error ko alag se save karte hain, taaki
     # "Tier C" dikhne wali company actually rate-limit ki wajah se unrated ho, is
     # baat ka pata frontend/reviewer ko chal sake.
-    final_score = calculate_final_score(ratings)
+    final_score = calculate_final_score(ratings, weights=weights_used)
 
     # Ennoble Fitment = strongest overall program fit (prompt + guidelines).
     program_fit["Ennoble Fitment"] = best_program_fit(program_fit)
@@ -383,9 +429,22 @@ def score_company(company_id: str):
             f"General CSR score is {final_score}/100, but overall Ennoble fitment is "
             f"{overall_fit}; the company is excluded from Tier A/B/C."
         )
+    if financial_data_missing:
+        tier_reasoning += (
+            " No financial data was found for this company, so scoring is education-led: "
+            "education_focus carries spend_capacity's weight (60 pts instead of 30), and "
+            "spend_capacity itself contributes 0."
+        )
 
     # Guidelines fit-check: decide the record stage (Prospect / Nurture / Enriched Data / Disqualified).
-    decision = decide_record_stage(research, program_fit)
+    # Keep the checklist's geography_priority_ok in sync with the same priority-
+    # geography override used for the score above, on a copy of research so the
+    # stored research_json (raw extraction) is never silently rewritten.
+    decision_research = research
+    if priority_geo_matches:
+        decision_research = dict(research)
+        decision_research["geographical_priority"] = "High"
+    decision = decide_record_stage(decision_research, program_fit)
 
     # Pehla error jo mila (factor rating ya program fitment) - scoring_error field
     # mein save karte hain taaki caller/frontend "yeh score API failure ki wajah
@@ -402,11 +461,14 @@ def score_company(company_id: str):
         "fitment_checklist": decision.checklist,
         "status": "scored",
         "scoring_error": scoring_error,
+        "financial_data_missing": financial_data_missing,
+        "weights_used": weights_used,
     })
 
     log_action(company_id, "scoring_completed", "ScoringAgent",
                details=f"stage={decision.record_stage}; category={category}; score={final_score}"
-                       + (f"; WARNING: {scoring_error['message']}" if scoring_error else ""))
+                       + (f"; WARNING: {scoring_error['message']}" if scoring_error else "")
+                       + ("; education-led scoring (no financial data)" if financial_data_missing else ""))
 
     return {
         "score": final_score,
@@ -417,5 +479,6 @@ def score_company(company_id: str):
         "reasoning": ratings,
         "program_fitment": program_fit,
         "scoring_error": scoring_error,
+        "financial_data_missing": financial_data_missing,
     }
 
