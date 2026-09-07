@@ -376,17 +376,17 @@ def search_company_csr_info(company_name: str, website: str = None):
             "query": f'"{company_name}" CSR ("total CSR expenditure" OR "CSR spend" OR "CSR obligation" OR "actual spend" OR "amount spent") (crore OR lakh) ("FY25" OR "FY 2024-25" OR "FY24" OR "FY 2023-24" OR "FY23") {" ".join(_recent_indian_fiscal_years())} ("annual report" OR BRSR OR site:csrbox.org OR "National CSR Portal")',
         },
         # 2. Education Previous Year CSR Spend & Sector Breakdown
-        {
-            "priority": 1,
-            "source_type": "Education CSR Spend",
-            "query": f'"{company_name}" CSR ("education spend" OR "spent on education" OR "education budget" OR "education sector" OR "promotion of education" OR "Schedule VII" OR "school education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "FY 2023-24" OR "FY 2024-25" OR "annual report")',
-        },
-        # 3. Past 3 Years CSR Spend History & Trend
-        {
-            "priority": 1,
-            "source_type": "Past 3 Years CSR Spend",
-            "query": f'"{company_name}" CSR ("past 3 years" OR "last 3 years" OR "three financial years" OR "3-year average" OR "average net profit" OR "CSR trend" OR "FY 2022-23" OR "FY 2023-24" OR "FY 2024-25" OR "FY23" OR "FY24" OR "FY25") (expenditure OR spend OR obligation OR crore)',
-        },
+        # {
+        #     "priority": 1,
+        #     "source_type": "Education CSR Spend",
+        #     "query": f'"{company_name}" CSR ("education spend" OR "spent on education" OR "education budget" OR "education sector" OR "promotion of education" OR "Schedule VII" OR "school education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "FY 2023-24" OR "FY 2024-25" OR "annual report")',
+        # },
+        # # 3. Past 3 Years CSR Spend History & Trend
+        # {
+        #     "priority": 1,
+        #     "source_type": "Past 3 Years CSR Spend",
+        #     "query": f'"{company_name}" CSR ("past 3 years" OR "last 3 years" OR "three financial years" OR "3-year average" OR "average net profit" OR "CSR trend" OR "FY 2022-23" OR "FY 2023-24" OR "FY 2024-25" OR "FY23" OR "FY24" OR "FY25") (expenditure OR spend OR obligation OR crore)',
+        # },
         # 4. CSR Overview & Initiatives
         {
             "priority": 2,
