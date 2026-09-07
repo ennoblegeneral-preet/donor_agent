@@ -243,6 +243,20 @@ def get_all_companies(username: str = None, role: str = None) -> list:
     return []
 
 
+def get_employee_stats(username: str) -> dict:
+    """Per-user activity counts for the admin Employee Activity table.
+
+    Reads from the user's own companies_<username> collection - the same place
+    create_company()/update_company() actually write to - rather than the legacy
+    flat `companies` collection, which per-user records never land in."""
+    col = _user_col(username)
+    return {
+        "searched": col.count_documents({}),
+        "approved": col.count_documents({"approval_status": "approved"}),
+        "crm_added": col.count_documents({"upload_status": "uploaded"}),
+    }
+
+
 def get_tier_a_companies(username: str = None, role: str = None) -> list:
     query = {"score": {"$gte": 85}, "status": "scored"}
     if role == "admin":

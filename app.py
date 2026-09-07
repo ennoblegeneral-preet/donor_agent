@@ -13,10 +13,10 @@ from bson import ObjectId
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from db import (
-    get_all_companies, get_company, update_company, create_company, delete_company, delete_companies, companies_col,
+    get_all_companies, get_company, update_company, create_company, delete_company, delete_companies,
     create_user, get_user_by_username, get_user_by_id, get_all_users, update_user,
     get_user_zoho_keys, update_user_zoho_keys,
-    get_user_search_keys, update_user_search_keys
+    get_user_search_keys, update_user_search_keys, get_employee_stats
 )
 from search_tool import set_search_context, get_effective_search_config
 from auth import hash_password, verify_password, generate_random_password, login_required, admin_required
@@ -1210,12 +1210,8 @@ def admin_dashboard():
     for u in users:
         if u["role"] == "admin":
             continue
-        employee_stats.append({
-            "username": u["username"],
-            "searched": companies_col.count_documents({"created_by": u["username"]}),
-            "approved": companies_col.count_documents({"approved_by": u["username"]}),
-            "crm_added": companies_col.count_documents({"crm_uploaded_by": u["username"]}),
-        })
+        stats = get_employee_stats(u["username"])
+        employee_stats.append({"username": u["username"], **stats})
 
     return render_template(
         "admin.html",

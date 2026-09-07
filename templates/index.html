@@ -11,6 +11,41 @@
 {% block page_subtitle %}Overview of your current intelligence pipeline.{% endblock %}
 
 {% block content %}
+<style>
+    /* "View Details" button box is exactly 36px tall (16px line-height + 20px
+       py-2.5 padding) sitting flush with the card's 16px padding, so its top
+       edge is always 52px from the card's bottom edge on every card. Placing
+       this at bottom:56px keeps it just above that bar with a small gap,
+       instead of overlapping it. */
+    .dm-hover-wrap { position: absolute; bottom: 56px; right: 16px; width: 26px; height: 26px; z-index: 6; }
+    .dm-hover-popup {
+        display: none;
+        position: absolute;
+        bottom: 26px;
+        right: 0;
+        width: 240px;
+        background: #161925;
+        border: 1px solid #2E3245;
+        border-radius: 10px;
+        padding: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+        z-index: 20;
+        cursor: default;
+    }
+    .dm-hover-wrap:hover .dm-hover-popup { display: block; }
+    .dm-hover-popup input {
+        width: 100%;
+        margin-bottom: 6px;
+        background: #0F1117;
+        border: 1px solid #2E3245;
+        border-radius: 6px;
+        padding: 6px 8px;
+        font-size: 12px;
+        color: #e2e8f0;
+    }
+    .dm-hover-popup input:last-of-type { margin-bottom: 0; }
+    .dm-hover-popup input:focus { outline: none; border-color: #6366f1; }
+</style>
 {% if db_error %}
 <div class="glass-card rounded-xl p-stack-md mb-stack-lg flex items-center gap-3" style="border-color: rgba(239,68,68,0.35);">
     <span class="text-[24px]">⚠️</span>
@@ -132,6 +167,16 @@
             <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
             <input id="companySearch" type="search" class="bg-[#1A1D2E] border border-[#2E3245] rounded pl-8 pr-3 py-1.5 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary" placeholder="Search companies" style="width: 180px;">
         </div>
+        {% if role == 'admin' %}
+        {% set owners = companies | map(attribute='created_by') | select('string') | reject('equalto', '') | unique | list | sort %}
+        <span class="font-body-sm text-body-sm text-on-surface-variant">Owner:</span>
+        <select id="ownerFilter" class="font-label-md text-label-md text-on-surface bg-[#1A1D2E] border border-[#2E3245] px-3 py-1.5 rounded focus:outline-none">
+            <option value="">All Owners</option>
+            {% for o in owners %}
+            <option value="{{ o }}">{{ o }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
         <span class="font-body-sm text-body-sm text-on-surface-variant">Sort:</span>
         <select id="sortSelect" class="font-label-md text-label-md text-on-surface bg-[#1A1D2E] border border-[#2E3245] px-3 py-1.5 rounded focus:outline-none">
             <option value="score-desc">Score (High to Low)</option>
@@ -215,6 +260,7 @@
          data-tier="{{ c.tier or '' }}"
          data-stage="{{ c.get('record_stage', '') }}"
          data-score="{{ score }}"
+         data-owner="{{ c.get('created_by') or '' }}"
          data-created="{{ c.created_at.isoformat() if c.get('created_at') else '' }}">
         <label class="dm-select-checkbox hidden" style="position:absolute; top:10px; right:10px; z-index:4; width:22px; height:22px;">
             <input type="checkbox" class="dm-select-input" data-id="{{ c.id_str }}" data-name="{{ c.company_name }}" onchange="updateDmSelection()" style="width:20px; height:20px; cursor:pointer; accent-color:#8b5cf6;">
@@ -240,6 +286,11 @@
                     {% if c.get('pipeline_warnings') %}
                     <span class="font-label-md text-label-md" title="{{ c.pipeline_warnings | map(attribute='stage') | list | join(', ') }}: {{ c.pipeline_warnings | map(attribute='message') | list | join(' | ') }}" style="display:inline-block; padding:2px 8px; border-radius:10px; background:rgba(249,115,22,0.15); color:#f97316; border:1px solid rgba(249,115,22,0.35);">
                         ⚠ {{ c.pipeline_warnings | length }}
+                    </span>
+                    {% endif %}
+                    {% if role == 'admin' and c.get('created_by') %}
+                    <span class="font-label-md text-label-md" title="Lead owner" style="display:inline-flex; align-items:center; gap:2px; padding:2px 8px; border-radius:10px; background:rgba(99,102,241,0.15); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3);">
+                        <span class="material-symbols-outlined" style="font-size:12px;">person</span>{{ c.created_by }}
                     </span>
                     {% endif %}
                 </div>
@@ -315,6 +366,26 @@
             </span>
         </div>
         </a>
+        {% set dm = c.get('crm') or {} %}
+        {% set dm_name = dm.get('decision_maker_name') or '' %}
+        {% set dm_phone = dm.get('decision_maker_phone') or '' %}
+        {% set dm_email = dm.get('decision_maker_email') or '' %}
+        {% set dm_complete = (dm_name and dm_phone and dm_email) %}
+        <div class="dm-hover-wrap">
+            <button type="button" class="dm-hover-trigger" title="Decision maker details - hover to view/edit"
+                    style="width:26px; height:26px; border-radius:9999px; display:flex; align-items:center; justify-content:center; cursor:pointer;
+                           border:1px solid {{ 'rgba(34,197,94,0.4)' if dm_complete else 'rgba(249,115,22,0.4)' }};
+                           background:{{ 'rgba(34,197,94,0.15)' if dm_complete else 'rgba(249,115,22,0.15)' }};">
+                <span class="material-symbols-outlined" style="font-size:15px; color:{{ '#4ade80' if dm_complete else '#f97316' }};">badge</span>
+            </button>
+            <div class="dm-hover-popup">
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase" style="margin-bottom:8px;">Decision Maker</p>
+                <input type="text" placeholder="Name" value="{{ dm_name }}" data-field="decision_maker_name" data-id="{{ c.id_str }}" onchange="saveDmField(this)">
+                <input type="text" placeholder="Phone" value="{{ dm_phone }}" data-field="decision_maker_phone" data-id="{{ c.id_str }}" onchange="saveDmField(this)">
+                <input type="email" placeholder="Email" value="{{ dm_email }}" data-field="decision_maker_email" data-id="{{ c.id_str }}" onchange="saveDmField(this)">
+                <p class="dm-save-status" style="font-size:10px; color:#94a3b8; margin-top:6px; min-height:12px;"></p>
+            </div>
+        </div>
     </div>
     {% endfor %}
 </div>
@@ -565,22 +636,25 @@
     let activeFilter = 'all';
     function applyFilters() {
         const query = document.getElementById('companySearch')?.value.trim().toLowerCase() || '';
+        const ownerFilter = document.getElementById('ownerFilter')?.value || '';
         let visibleCount = 0;
         document.querySelectorAll('.company-card').forEach(card => {
             const matchesSearch = card.dataset.name.includes(query);
+            const matchesOwner = !ownerFilter || card.dataset.owner === ownerFilter;
             const matchesFilter = activeFilter === 'all'
                 || (activeFilter === 'researching' && card.dataset.status !== 'scored' && card.dataset.status !== 'failed_research')
                 || (activeFilter === 'scored' && card.dataset.status === 'scored')
                 || (activeFilter === 'tier-a' && card.dataset.tier === 'Tier A')
                 || (activeFilter === 'tier-b' && card.dataset.tier === 'Tier B')
                 || (activeFilter === 'prospect' && card.dataset.stage === 'Prospect');
-            const visible = matchesSearch && matchesFilter;
+            const visible = matchesSearch && matchesOwner && matchesFilter;
             card.style.display = visible ? '' : 'none';
             if (visible) visibleCount++;
         });
         document.getElementById('noResultsMsg')?.classList.toggle('hidden', visibleCount !== 0);
     }
     document.getElementById('companySearch')?.addEventListener('input', applyFilters);
+    document.getElementById('ownerFilter')?.addEventListener('change', applyFilters);
     document.querySelectorAll('.filter-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             document.querySelectorAll('.filter-tab').forEach(t => {
@@ -644,6 +718,41 @@
             cb.checked = checked;
         });
         updateDmSelection();
+    }
+
+    // Hover-popup decision maker fields on each dashboard card. Saves on
+    // blur/change to the same /update-crm-fields endpoint the company detail
+    // page already uses, then updates the trigger badge color in place so a
+    // full page reload isn't needed to see it go from "missing" to "filled".
+    function saveDmField(inputEl) {
+        const companyId = inputEl.dataset.id;
+        const field = inputEl.dataset.field;
+        const value = inputEl.value.trim();
+        const popup = inputEl.closest('.dm-hover-popup');
+        const statusEl = popup ? popup.querySelector('.dm-save-status') : null;
+
+        if (statusEl) statusEl.textContent = 'Saving…';
+
+        const formData = new FormData();
+        formData.append(field, value);
+
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => {
+                if (statusEl) statusEl.textContent = data.status === 'updated' ? 'Saved ✓' : (data.message || 'Could not save');
+                if (data.status !== 'updated' || !popup) return;
+
+                const wrap = inputEl.closest('.dm-hover-wrap');
+                const trigger = wrap ? wrap.querySelector('.dm-hover-trigger') : null;
+                if (!trigger) return;
+
+                const allFilled = Array.from(popup.querySelectorAll('input')).every(i => i.value.trim());
+                trigger.style.borderColor = allFilled ? 'rgba(34,197,94,0.4)' : 'rgba(249,115,22,0.4)';
+                trigger.style.background = allFilled ? 'rgba(34,197,94,0.15)' : 'rgba(249,115,22,0.15)';
+                const icon = trigger.querySelector('span');
+                if (icon) icon.style.color = allFilled ? '#4ade80' : '#f97316';
+            })
+            .catch(() => { if (statusEl) statusEl.textContent = 'Error saving'; });
     }
 
     let loadedDmData = [];
