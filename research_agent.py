@@ -7,14 +7,16 @@ from search_tool import (
     search_company_csr_info,
     search_contact_sources,
     search_education_fields,
+    search_company_geography,
     search_annual_report_pdf_via_screener,
     search_annual_report_pdf,
     get_financials_from_screener,
+    get_annual_report_pdfs_by_year,
     search_education_spend_data,
     search_unlisted_company_financials,
     search_person_linkedin,
 )
-from extraction_tool import extract_research_with_contact, extract_education_fields
+from extraction_tool import extract_research_with_contact, extract_education_fields, extract_geography_fields
 from models import CompanyResearch
 from financial_extractor import (
     extract_csr_data,
@@ -177,6 +179,25 @@ def research_company(company_id: str, company_name: str, website: str = None):
         education_error = {"type": "education_search_failed", "message": str(exc)}
         print(f"[Education Research Warning] Dedicated education pass failed: {exc}")
 
+    # Dedicated geography fallback pass. The main CSR/contact/partner searches only
+    # surface program-location info incidentally, so when program_district_state
+    # came back empty, fire one targeted follow-up query instead of leaving the
+    # priority-geography scoring override (scoring_agent.py) with nothing to match.
+    missing_geo_values = {"", "not found", "not publicly available", "none", "n/a", "na"}
+    if (research.program_district_state or "").strip().lower() in missing_geo_values:
+        try:
+            geo_search = search_company_geography(company_name, website)
+            geo_fields, geo_error = extract_geography_fields(company_name, geo_search.get("sources", []))
+            if not geo_error and geo_fields:
+                merged = research.model_dump()
+                for field in ("city", "state", "program_district_state", "geographical_priority"):
+                    new_value = geo_fields.get(field)
+                    if new_value and str(new_value).strip().lower() not in missing_geo_values:
+                        merged[field] = new_value
+                research = CompanyResearch(**merged)
+        except Exception as exc:
+            print(f"[Geography Research Warning] Dedicated geography fallback failed: {exc}")
+
     source_urls = "; ".join([s["url"] for s in sources[:5] if s.get("url")])
 
     # Save to MongoDB. Agar LLM extraction API hi fail hui thi (sources mile the,
@@ -249,16 +270,20 @@ def research_company_with_financials(company_id: str, company_name: str, website
     previous_year = screener_result.get("previous_year") if screener_result else None
     previous_year_candidates = (screener_result.get("previous_year_pdf_url_candidates") if screener_result else None) or []
     latest_year_candidates = (screener_result.get("pdf_url_candidates") if screener_result else None) or []
+    latest_year = screener_result.get("latest_year") if screener_result else None
 
-    if previous_year_candidates:
-        csr_report_candidates = previous_year_candidates
-        csr_report_year = previous_year
-    elif latest_year_candidates:
-        csr_report_candidates = latest_year_candidates
-        csr_report_year = screener_result.get("latest_year") if screener_result else None
-    else:
-        csr_report_candidates = [report_url] if report_url else []
-        csr_report_year = None
+    # CSR extraction tries the LATEST report first - it may already carry the final,
+    # audited CSR annexure for the most recent FY - and only falls back to the
+    # previous year's report if the latest one has no extractable CSR section
+    # (not yet indexed, download blocked, or genuinely no CSR annexure pages found).
+    csr_report_year_candidates = (
+        [(latest_year, u) for u in latest_year_candidates]
+        + [(previous_year, u) for u in previous_year_candidates]
+    )
+    if not csr_report_year_candidates and report_url:
+        csr_report_year_candidates = [(None, report_url)]
+    csr_report_candidates = [u for _, u in csr_report_year_candidates]
+    csr_report_year = csr_report_year_candidates[0][0] if csr_report_year_candidates else None
 
     if not screener_url:
         print(f"[Unlisted Fallback] {company_name} Screener pe nahi mila. Web & PDF search for current year financials starting...")
@@ -279,6 +304,7 @@ def research_company_with_financials(company_id: str, company_name: str, website
 
         if pdf_url_found and not csr_report_candidates:
             csr_report_candidates = [pdf_url_found]
+            csr_report_year_candidates = [(None, pdf_url_found)]
 
         if combined_text:
             extracted = extract_unlisted_financial_data(combined_text, company_name)
@@ -330,12 +356,13 @@ def research_company_with_financials(company_id: str, company_name: str, website
         print(f"[⚠️] CSR Budget (Net Profit basis) calculate nahi ho saka: {csr_budget_net_profit.get('note')}")
 
     # Step 3: Annual report PDF na mile to general web search fallback.
-    # CSR/education ke liye previous-year report use karte hain; agar wo na mila
-    # to jo bhi (latest) report mila usi par CSR extraction kar lete hain.
+    # CSR/education ke liye latest-year report pehle try karte hain (see
+    # csr_report_year_candidates above); agar wo bhi na mila to general web search.
     if not csr_report_candidates:
         print(f"[Fallback] Screener se PDF nahi mila, general web search try kar rahe hain...")
         fallback_url = search_annual_report_pdf(company_name, website)
         csr_report_candidates = [fallback_url] if fallback_url else []
+        csr_report_year_candidates = [(None, fallback_url)] if fallback_url else []
         csr_report_year = None
     report_url = report_url or (csr_report_candidates[0] if csr_report_candidates else None)  # DB mein save karne ke liye
 
@@ -353,13 +380,14 @@ def research_company_with_financials(company_id: str, company_name: str, website
     csr_report_url = None
     committee_members_linkedin = {}
     pdf_text = ""
-    if csr_report_candidates:
-        year_label = f"FY{str(csr_report_year)[-2:]}" if csr_report_year else "latest available"
-        for candidate_url in csr_report_candidates:
+    if csr_report_year_candidates:
+        for candidate_year, candidate_url in csr_report_year_candidates:
+            year_label = f"FY{str(candidate_year)[-2:]}" if candidate_year else "latest available"
             print(f"[Step 4] CSR data {year_label} report se nikaal rahe hain ({candidate_url})...")
             pdf_text = extract_csr_section_text(candidate_url)
             if pdf_text:
                 csr_report_url = candidate_url
+                csr_report_year = candidate_year
                 break
             print(f"[⚠️] Is source se PDF extract nahi ho saka, agla candidate source try kar rahe hain (agar hai)...")
 
@@ -456,6 +484,92 @@ def research_company_with_financials(company_id: str, company_name: str, website
         "education_spend": education_spend_data,
         "education_sources": education_sources
     }
+
+
+def list_available_csr_years(company_id: str, max_years: int = 2) -> dict:
+    """For the company detail page's 'View Previous Years' CSR Spend' button:
+    returns up to `max_years` fiscal years BEFORE the year the main pipeline
+    already extracted (company.csr_report_year), using the company's
+    already-persisted screener_url (no re-search needed). This is a separate,
+    on-demand add-on - it does not touch/replace the main pipeline's own
+    current-year CSR extraction (research_company_with_financials)."""
+    company = get_company(company_id)
+    if not company:
+        return {"status": "error", "message": "Company not found"}
+
+    screener_url = company.get("screener_url")
+    if not screener_url:
+        return {"status": "not_available", "years": [], "message": "No Screener profile on record for this company."}
+
+    year_map = get_annual_report_pdfs_by_year(screener_url)
+    current_year = company.get("csr_report_year")
+    years = sorted((y for y in year_map if y != current_year), reverse=True)[:max_years]
+    return {"status": "success", "years": years}
+
+
+def get_csr_spend_for_year(company_id: str, year: int) -> dict:
+    """On-demand fetch for a SPECIFIC historical year's CSR spend/unspent/education
+    figures - independent of the main research pipeline's current-year CSR data.
+    Parses that year's own annual report PDF via Screener.
+
+    Cached both in Redis and on the company's own Mongo doc
+    (csr_year_history.<year>) since a published annual report's figures never
+    change - once fetched for a company, it's free on every future click.
+    """
+    company = get_company(company_id)
+    if not company:
+        return {"status": "error", "message": "Company not found"}
+
+    year_key = str(year)
+    cached_history = company.get("csr_year_history") or {}
+    if year_key in cached_history:
+        return {"status": "success", "year": year, "cached": True, **cached_history[year_key]}
+
+    screener_url = company.get("screener_url")
+    if not screener_url:
+        return {"status": "not_available", "message": "No Screener profile on record for this company."}
+
+    cache_key = make_key("csr-year-data", screener_url, year)
+    cached = get_json(cache_key)
+    if isinstance(cached, dict):
+        update_company(company_id, {f"csr_year_history.{year_key}": cached})
+        return {"status": "success", "year": year, "cached": True, **cached}
+
+    year_map = get_annual_report_pdfs_by_year(screener_url)
+    candidates = year_map.get(year) or []
+    if not candidates:
+        return {"status": "not_available", "message": f"No annual report found for {year} on Screener."}
+
+    pdf_text = ""
+    used_url = None
+    for candidate_url in candidates:
+        pdf_text = extract_csr_section_text(candidate_url)
+        if pdf_text:
+            used_url = candidate_url
+            break
+
+    if not pdf_text:
+        return {"status": "not_available", "message": "Report found but no extractable CSR section (possibly a scanned/image-only PDF)."}
+
+    csr_data, err = extract_csr_data(pdf_text, company.get("company_name", ""))
+    if err:
+        return {"status": "error", "message": err.get("message", "CSR extraction failed")}
+
+    education_data = calculate_education_spend_percentage(csr_data) or {}
+
+    result = {
+        "pdf_url": used_url,
+        "csr_spend": csr_data.get("csr_spend"),
+        "csr_spend_year": csr_data.get("csr_spend_year"),
+        "csr_unspent_amount": csr_data.get("csr_unspent_amount"),
+        "education_spend": education_data.get("current_education_spend"),
+        "education_spend_percentage": education_data.get("current_education_percentage"),
+    }
+
+    set_json(cache_key, result, ttl_seconds=60 * 60 * 24 * 365)  # published filings never change
+    update_company(company_id, {f"csr_year_history.{year_key}": result})
+
+    return {"status": "success", "year": year, "cached": False, **result}
 
 
 if __name__ == "__main__":

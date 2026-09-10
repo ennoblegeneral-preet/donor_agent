@@ -18,7 +18,7 @@ from db import (
     get_user_zoho_keys, update_user_zoho_keys,
     get_user_search_keys, update_user_search_keys, get_employee_stats
 )
-from search_tool import set_search_context, get_effective_search_config
+from search_tool import set_search_context, get_effective_search_config, start_search_tracking, get_tracked_search_usage
 from auth import hash_password, verify_password, generate_random_password, login_required, admin_required
 from research_agent import research_company
 from compliance_agent import check_compliance
@@ -33,7 +33,7 @@ from models import CompanyResearch
 from warm_connect_agent import find_warm_connect, recommend_outreach_channel
 from message_drafting_agent import draft_outreach_message
 from meeting_brief_agent import generate_meeting_brief
-from research_agent import research_company_with_financials
+from research_agent import research_company_with_financials, list_available_csr_years, get_csr_spend_for_year
 from error_utils import classify_error
 from llm_service import start_tracking, get_tracked_usage
 
@@ -68,7 +68,15 @@ def _prepare_committee_linkedin(company):
 limiter = Limiter(
     key_func=get_rate_limit_key,
     app=app,
-    default_limits=["200 per day", "50 per hour", "15 per 10 minutes"],
+    # This default applies as ONE SHARED counter across every route that
+    # doesn't set its own @limiter.limit (dashboard, company detail, approve/
+    # reject, CRM field edits, warm-connect, settings, admin actions, etc.) -
+    # 15 per 10 minutes was easily exhausted by completely normal browsing
+    # (a dashboard reload + a couple of company pages + one approve/reject
+    # already gets close). The genuinely expensive routes (/research,
+    # /research-bulk, /upload-crm-bulk) already have their own tighter,
+    # dedicated limits below and are unaffected by this default.
+    default_limits=["1000 per day", "150 per hour", "60 per 10 minutes"],
     storage_uri="memory://",
 )
 
@@ -137,6 +145,7 @@ COMPANY_RESEARCH_TIMEOUT_SECONDS = int(os.getenv("COMPANY_RESEARCH_TIMEOUT_SECON
 def _execute_company_pipeline_stages(company_id, company_name, website, username=None):
     """Run sequential pipeline stages for a single company."""
     start_tracking()
+    start_search_tracking()
     # Set search context for the execution thread
     user_search_keys = get_user_search_keys(username) if username else {}
     set_search_context(user_search_keys)
@@ -197,11 +206,20 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
                 f"({usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion) "
                 f"across {usage['calls']} LLM calls"
             )
+        search_usage = get_tracked_search_usage()
+        if search_usage and search_usage.get("total_calls"):
+            update_company(company_id, {"search_usage_estimate": search_usage})
+            print(
+                f"[Search Usage] {company_name}: {search_usage['total_calls']} web search credits used "
+                f"({search_usage['serper_calls']} Serper + {search_usage['tavily_calls']} Tavily), "
+                f"{search_usage['cache_hits']} more served from cache at no extra cost"
+            )
 
 
 def run_company_pipeline(company_id, company_name, website, username=None):
     """Run the existing pipeline in the background and enforce strict execution timeout."""
     start_tracking()
+    start_search_tracking()
     user_search_keys = get_user_search_keys(username) if username else {}
     set_search_context(user_search_keys)
 
@@ -248,6 +266,14 @@ def run_company_pipeline(company_id, company_name, website, username=None):
                 f"[Token Usage] {company_name}: {usage['total_tokens']} tokens total "
                 f"({usage['prompt_tokens']} prompt + {usage['completion_tokens']} completion) "
                 f"across {usage['calls']} LLM calls"
+            )
+        search_usage = get_tracked_search_usage()
+        if search_usage and search_usage.get("total_calls"):
+            update_company(company_id, {"search_usage_estimate": search_usage})
+            print(
+                f"[Search Usage] {company_name}: {search_usage['total_calls']} web search credits used "
+                f"({search_usage['serper_calls']} Serper + {search_usage['tavily_calls']} Tavily), "
+                f"{search_usage['cache_hits']} more served from cache at no extra cost"
             )
         try:
             import psutil
@@ -682,8 +708,9 @@ def settings_zoho():
 @login_required
 def upload_crm(company_id):
     username = session.get("username")
-    upload_company_to_zoho(company_id, username=username)
-    update_company(company_id, {"crm_uploaded_by": username}, username=username)
+    result = upload_company_to_zoho(company_id, username=username)
+    if result.get("status") in ("success", "simulated"):
+        update_company(company_id, {"crm_uploaded_by": username}, username=username)
     return redirect(url_for("dashboard"))
 
 
@@ -1139,6 +1166,20 @@ def copy_gpt_table(company_id):
         return jsonify({"status": "error", "message": "Company not found"}), 404
     table_markdown = format_gpt_horizontal_table(company)
     return jsonify({"status": "success", "table": table_markdown})
+
+@app.route("/csr-available-years/<company_id>", methods=["GET"])
+@login_required
+def csr_available_years(company_id):
+    result = list_available_csr_years(company_id)
+    status_code = 404 if result.get("status") == "error" else 200
+    return jsonify(result), status_code
+
+@app.route("/csr-history/<company_id>/<int:year>", methods=["GET"])
+@login_required
+def csr_history_year(company_id, year):
+    result = get_csr_spend_for_year(company_id, year)
+    status_code = 404 if result.get("status") == "error" else 200
+    return jsonify(result), status_code
 
 @app.route("/login", methods=["GET", "POST"])
 def login():

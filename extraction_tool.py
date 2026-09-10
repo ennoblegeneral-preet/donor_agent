@@ -32,7 +32,8 @@ RELEVANT_KEYWORDS = {
     "crore", "lakh", "turnover", "revenue", "profit", "budget", "spend", "spent",
     "unspent", "financial year", "fy", "ticket size", "total csr expenditure",
     # Contact & Leadership
-    "contact", "email", "phone", "mobile", "director", "head", "officer", "manager", "trustee", "linkedin"
+    "contact", "email", "phone", "mobile", "director", "head", "officer", "manager", "trustee",
+    "hr", "human resources", "csr head", "linkedin"
 }
 
 def filter_relevant_text(raw_text: str, max_chars: int = 3500) -> str:
@@ -126,7 +127,7 @@ CONTACT PERSON RULES:
   3. CSR Committee Member / Board Member / Trustee
   4. CEO / Managing Director (MD) / Founder / President / Executive Director
   5. Chief Human Resources Officer (CHRO) / HR Head / VP HR / Director HR
-  6. Any senior Director / Key Management Personnel listed in public disclosures
+  6. csr specialist / csr consultant / AM / DM 
 - If no dedicated CSR head is mentioned, ALWAYS extract the CEO, Managing Director, Founder, or HR Head.
 - Priority order for contact sources: Company Website/Leadership page > Annual Report/CSR Report/BRSR > LinkedIn > Registry (Zaubacorp/Tofler) > Media.
 - LinkedIn may be used for: name, current designation, company association, and linkedin_url.
@@ -223,6 +224,56 @@ TEXT EXCERPTS:
     return CompanyResearch(**data), llm_error
 
 
+def extract_geography_fields(company_name: str, sources: list):
+    """Dedicated fallback extraction used only when the main research pass came
+    back with no CSR program-location data - runs a smaller, geography-only
+    prompt over the targeted follow-up search from search_company_geography(),
+    instead of leaving program_district_state empty just because the general
+    CSR/contact text never happened to mention a location."""
+    if not sources:
+        return {}, None
+
+    combined_text = ""
+    for s in sources[:5]:
+        clean_text = filter_relevant_text(s.get("text", ""), max_chars=3500)
+        if clean_text:
+            combined_text += f"\n\n--- SOURCE: {s.get('url', '')} ---\n{clean_text}"
+
+    if not combined_text.strip():
+        return {}, None
+
+    prompt = f"""You are a geography research verifier for "{company_name}"'s CSR programs.
+Use ONLY the text excerpts below. Do not use general knowledge or guess.
+
+GEOGRAPHY FIELD RULES:
+- "city"/"state": company HQ city/state, OR the CSR-relevant operating city/state if that's what the text discusses.
+- "program_district_state": the specific district(s)/state(s) named for CSR program activity/beneficiaries
+  (e.g. "Pune, Maharashtra; Bengaluru, Karnataka"). List all named locations, semicolon-separated. If
+  the text names no such locations, write "Not Found" - do not fabricate.
+- "geographical_priority": based purely on breadth of CSR presence found in the text (NOT compared to
+  any specific target region):
+    "High"   = CSR programs are named across 3+ distinct states/districts, OR described as pan-India/nationwide.
+    "Medium" = CSR programs are named in 2 states/districts.
+    "Low"    = only 1 location is named, or no program-location information is found at all.
+
+Return ONLY valid JSON in this exact structure, nothing else:
+{{
+  "city": "...",
+  "state": "...",
+  "program_district_state": "...",
+  "geographical_priority": "..."
+}}
+
+TEXT EXCERPTS:
+{combined_text[:20000]}
+"""
+
+    data, error = call_llm_safe(prompt, json_mode=True, timeout=90)
+    if not isinstance(data, dict):
+        data = {}
+    return data, error
+
+
 EDUCATION_FIELDS = [
     "csr_stem_education",
     "csr_school_infra_transformation",
@@ -231,6 +282,21 @@ EDUCATION_FIELDS = [
     "csr_quality_education",
     "csr_model_school_transformation",
 ]
+
+# Same field definitions used in the main extraction prompt (extract_research_with_contact),
+# repeated here for the dedicated education pass. Without these, the LLM only sees a bare
+# field name like "csr_school_infra_transformation" and has to guess what counts as evidence -
+# which produced real contradictions (e.g. evidence text describing a drinking-water/hygiene
+# programme, which IS school-infrastructure evidence per this definition, but judged "No"
+# because the model read the field name narrowly as "school buildings only").
+EDUCATION_FIELD_DEFINITIONS = {
+    "csr_stem_education": "Does company support STEM, science labs, computer labs, robotics, digital learning, or coding?, Artificial Intelligence,Atal Tinkering Labs",
+    "csr_school_infra_transformation": "Does company support School Infrastructure (classrooms, sanitation, drinking water, hygiene, building repair, garden , school infrastructure)?",
+    "csr_holistic_transformation": "Does company support Holistic/Whole School Transformation or comprehensive school development?",
+    "csr_anganwadi_transformation": "Does company support Anganwadi, early childhood care, pre-schools, or maternal/child nutrition?",
+    "csr_quality_education": "Does company support Quality Education (general education, teacher training, scholarships, literacy, learning outcomes)?",
+    "csr_model_school_transformation": "Does company support Model Schools, government school upgrades, or district-level education?",
+}
 
 
 def extract_education_fields(company_name: str, search_data: dict):
@@ -253,6 +319,7 @@ def extract_education_fields(company_name: str, search_data: dict):
             )
         sections.append(
             f"\n### FIELD: {field}\n"
+            f"DEFINITION: {EDUCATION_FIELD_DEFINITIONS[field]}\n"
             f"SEARCH METADATA: {json.dumps(field_meta[field], ensure_ascii=False)}\n"
             + ("\n".join(source_lines) if source_lines else "NO SOURCES")
         )
@@ -260,16 +327,25 @@ def extract_education_fields(company_name: str, search_data: dict):
     prompt = f"""You are an evidence verifier for {company_name}'s CSR education programs.
 Use ONLY the labelled source excerpts below. Do not use general knowledge.
 
+Each field has a DEFINITION below stating exactly what counts as evidence for
+it (e.g. sanitation/drinking water/hygiene DOES count as School Infrastructure
+evidence, not just literal classroom construction) - judge "value" against
+that DEFINITION as well as the filed name , not against the field name alone.
+
 For each field return:
-- value: Yes only when the source explicitly supports that exact activity;
-  No only when a reliable source explicitly says it is absent; otherwise Not Found.
-- evidence: a short factual quote/paraphrase grounded in the source, or empty string.
+- value: Yes only when the source explicitly supports that exact activity, AS
+  DESCRIBED IN ITS DEFINITION; No only when a reliable source explicitly says
+  it is absent; otherwise Not Found.
+- evidence: a short factual quote/paraphrase grounded in the source which show the company has invested in that field.
 - source_indexes: indexes of the supporting sources, such as [1, 2].
 
-Do not treat a generic statement that the company supports education as proof of
-STEM, school infrastructure, holistic transformation, Anganwadi, quality
-education, or model-school transformation. Return Not Found when the complete
-field search metadata shows sources were checked but no specific evidence exists.
+Your own "evidence" text must never contradict your own "value" - if the
+evidence you are about to write actually matches the field's DEFINITION, the
+value must be Yes, not No. Do not treat a generic statement that the company
+supports education as proof of STEM, school infrastructure, holistic
+transformation, Anganwadi, quality education, or model-school transformation.
+Return Not Found when the complete field search metadata shows sources were
+checked but no specific evidence exists.
 
 Return ONLY valid JSON:
 {{

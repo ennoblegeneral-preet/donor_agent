@@ -62,6 +62,9 @@
 </nav>
 
 <main class="flex-1 md:ml-[280px] flex flex-col min-h-screen relative">
+    <div class="bg-blob" style="width:320px;height:320px;top:-90px;left:8%;background:#6366f1;"></div>
+    <div class="bg-blob" style="width:260px;height:260px;top:220px;right:-70px;background:#22d3ee;animation-delay:-6s;"></div>
+
     <header class="md:hidden fixed top-0 w-full z-50 flex justify-between items-center px-gutter h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/30">
         <button class="text-on-surface" id="sidebarToggle" aria-label="Toggle navigation">
             <span class="material-symbols-outlined">menu</span>
@@ -70,7 +73,7 @@
         <div class="w-6"></div>
     </header>
 
-    <div class="flex-1 p-margin-mobile md:p-margin-desktop mt-16 md:mt-0 pt-stack-lg max-w-container-max mx-auto w-full">
+    <div class="relative z-10 flex-1 p-margin-mobile md:p-margin-desktop mt-16 md:mt-0 pt-stack-lg max-w-container-max mx-auto w-full">
         <div class="mb-stack-lg flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
                 {% block page_kicker %}{% endblock %}
