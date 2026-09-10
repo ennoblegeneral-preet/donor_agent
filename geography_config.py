@@ -15,8 +15,8 @@ PRIORITY_GEOGRAPHIES = [
     "Bihar",
     "Gujarat",
     "Delhi NCR",
-    "Delhi",          # alias for Delhi NCR - research often just says "Delhi"/"New Delhi"
-    "New Delhi",       # alias for Delhi NCR
+    "Delhi",          
+    "New Delhi",    
     "Mumbai",
     "Maharashtra",
     "Palghar",

@@ -153,23 +153,26 @@
                 <strong>Program District/State:</strong>
                 <span>{{ research.get('program_district_state', '-') if research else '-' }}</span>
             </div>
-            {#
-            Commented out per request: these fields render "Not Found" / "Not
-            publicly available" too often to be useful in the dashboard - the
-            same data (when it IS found) still shows further down in the
-            dedicated "CSR Data"/"Education CSR Spend" panels below, which are
-            already conditional on real data being present.
+            {% set csr_data = c.get('csr_data') or {} %}
             <div class="detail-field">
-                <strong>Education CSR Spend:</strong>
-                <span>{{ research.get('education_csr_spend', '-') if research else '-' }}</span>
+                <strong>Annual CSR Spend:</strong>
+                <span>
+                    {% if csr_data.get('csr_spend') is not none %}
+                        ₹{{ csr_data.get('csr_spend') | commas }} Cr{% if csr_data.get('csr_spend_year') %} ({{ csr_data.get('csr_spend_year') }}){% endif %}
+                    {% else %}
+                        {{ research.get('csr_spend_previous_fy', '-') if research else '-' }}
+                    {% endif %}
+                </span>
             </div>
             <div class="detail-field">
-                <strong>Previous Year Total CSR Spend:</strong>
-                <span>{{ research.get('csr_spend_previous_fy', '-') if research else '-' }}</span>
-            </div>
-            <div class="detail-field">
-                <strong>Past 3 Years CSR Spend:</strong>
-                <span>{{ research.get('csr_spend_previous_3fy', '-') if research else '-' }}</span>
+                <strong>CSR Unspent Amount:</strong>
+                <span>
+                    {% if csr_data.get('csr_unspent_amount') is not none %}
+                        ₹{{ csr_data.get('csr_unspent_amount') | commas }} Cr
+                    {% else %}
+                        -
+                    {% endif %}
+                </span>
             </div>
             {% set partners_list = (csr_data.get('implementation_partners') if csr_data else []) or
             (research.get('existing_implementation_partners') if research else []) or [] %}
@@ -177,10 +180,8 @@
                 <strong>Implementation Partners (NGOs):</strong>
                 <span>{{ (partners_list | join(', ')) or '-' }}</span>
             </div>
-            {% set comm_list = (csr_data.get('committee_members') if csr_data else []) or (c.get('committee_members') or
-            []) %}
-            {% set committee_linkedin = c.get('committee_members_linkedin') or (c.get('csr_data') or
-            {}).get('committee_members_linkedin') or {} %}
+            {% set comm_list = (csr_data.get('committee_members') if csr_data else []) or (c.get('committee_members') or []) %}
+            {% set committee_linkedin = c.get('committee_members_linkedin') or (c.get('csr_data') or {}).get('committee_members_linkedin') or {} %}
             {% set committee_linkedin_lookup = c.get('_committee_members_linkedin_lookup') or {} %}
             <div class="detail-field">
                 <strong>CSR Committee Members:</strong>
@@ -190,8 +191,7 @@
                     {% set li_url = committee_linkedin_lookup.get(member|string|trim|lower) %}
                     {% if li_url %}
                     <a href="{{ li_url }}" target="_blank" rel="noopener noreferrer" class="source-link"
-                        style="display:inline-flex; align-items:center; gap:2px;">{{ member }} 🔗</a>{% if not loop.last
-                    %}, {% endif %}
+                        style="display:inline-flex; align-items:center; gap:2px;">{{ member }} 🔗</a>{% if not loop.last %}, {% endif %}
                     {% else %}
                     {{ member }}{% if not loop.last %}, {% endif %}
                     {% endif %}
@@ -201,7 +201,6 @@
                     {% endif %}
                 </span>
             </div>
-            #}
             <div class="detail-field full-width">
                 <strong>Source URL:</strong>
                 {% set source_urls = (research.get('source_url', '') if research else '').split(';') %}
@@ -294,7 +293,8 @@
 
 <!-- Financial Data -->
 {% set financial_data = c.get('financial_data') or {} %}
-{% if financial_data and (financial_data.get('turnover') or financial_data.get('pbt')) %}
+{% set csr_data = c.get('csr_data') or {} %}
+{% if (financial_data and (financial_data.get('turnover') or financial_data.get('pbt'))) or csr_data %}
 <div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
     <div
         style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom: 16px;">
@@ -396,6 +396,13 @@
             </div>
             {% endfor %}
         </div>
+    </div>
+    {% endif %}
+
+    {% if c.get('screener_url') %}
+    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
+        <button class="action-btn" onclick="loadCsrHistoryYears('{{ c.id_str }}')">📜 View Previous Years' CSR Spend</button>
+        <div id="csrHistoryYears-{{ c.id_str }}" style="display:none; margin-top: 12px;"></div>
     </div>
     {% endif %}
 
@@ -1178,6 +1185,60 @@
                 }
             })
             .catch(error => showNotification('Error copying GPT table row: ' + error.message, 'error'));
+    }
+
+    function loadCsrHistoryYears(companyId) {
+        const container = document.getElementById(`csrHistoryYears-${companyId}`);
+        container.style.display = 'block';
+        container.innerHTML = '<span style="font-size:12px; color:#94a3b8;">Loading available years…</span>';
+        fetch(`/csr-available-years/${companyId}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.status !== 'success' || !data.years || !data.years.length) {
+                    container.innerHTML = `<span style="font-size:12px; color:#94a3b8;">${data.message || 'No previous annual reports found on Screener.'}</span>`;
+                    return;
+                }
+                const buttons = data.years.map(y =>
+                    `<button class="action-btn" style="padding:6px 12px; font-size:12px;" onclick="loadCsrYearData('${companyId}', ${y}, this)">FY${String(y).slice(-2)}</button>`
+                ).join(' ');
+                container.innerHTML = `<div style="display:flex; gap:8px; flex-wrap:wrap;">${buttons}</div><div id="csrYearResult-${companyId}" style="margin-top:10px;"></div>`;
+            })
+            .catch(err => { container.innerHTML = `<span style="font-size:12px; color:#f87171;">Failed to load: ${err.message}</span>`; });
+    }
+
+    function loadCsrYearData(companyId, year, btn) {
+        const resultDiv = document.getElementById(`csrYearResult-${companyId}`);
+        if (btn) { btn.disabled = true; }
+        resultDiv.innerHTML = '<span style="font-size:12px; color:#94a3b8;">Fetching & parsing that year\'s annual report…</span>';
+        fetch(`/csr-history/${companyId}/${year}`)
+            .then(r => r.json())
+            .then(data => {
+                if (btn) { btn.disabled = false; }
+                if (data.status !== 'success') {
+                    resultDiv.innerHTML = `<span style="font-size:12px; color:#94a3b8;">${data.message || 'Not available for this year.'}</span>`;
+                    return;
+                }
+                const fmt = v => (v === null || v === undefined) ? '-' : v;
+                resultDiv.innerHTML = `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">
+                        <div style="background: rgba(148,163,184,0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15);">
+                            <div style="font-size: 11px; color: #94a3b8;">CSR Spend (FY${String(year).slice(-2)})</div>
+                            <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹${fmt(data.csr_spend)} Cr</div>
+                        </div>
+                        <div style="background: rgba(239, 68, 68, 0.1); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.2);">
+                            <div style="font-size: 11px; color: #94a3b8;">CSR Unspent</div>
+                            <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹${fmt(data.csr_unspent_amount)} Cr</div>
+                        </div>
+                        <div style="background: rgba(59, 130, 246, 0.1); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.2);">
+                            <div style="font-size: 11px; color: #94a3b8;">🎓 Education Spend</div>
+                            <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹${fmt(data.education_spend)} Cr ${data.education_spend_percentage != null ? `(${data.education_spend_percentage}%)` : ''}</div>
+                        </div>
+                    </div>`;
+            })
+            .catch(err => {
+                if (btn) { btn.disabled = false; }
+                resultDiv.innerHTML = `<span style="font-size:12px; color:#f87171;">Failed to fetch: ${err.message}</span>`;
+            });
     }
 
     function _setOutreachLoading(btnId, loading, originalText) {

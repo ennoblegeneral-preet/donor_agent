@@ -317,4 +317,20 @@
     .pipeline-steps .is-complete > span { font-size: 0; border-color: #4ade80; }
     .pipeline-steps .is-error { color: #fb7185; border-color: rgba(251,113,133,.35); }
     .pipeline-note { margin-top: 16px; color: #64748b; text-align: center; font-size: .72rem; }
+
+    /* ── Funky UI accents: entrance animations, hover motion, decorative blobs ── */
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fade-in-up { animation: fadeInUp 0.55s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+    @keyframes floatBlob { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(24px, -30px) scale(1.08); } }
+    .bg-blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: 0.22; pointer-events: none; z-index: 0; animation: floatBlob 14s ease-in-out infinite; }
+
+    .company-card { transition-property: transform, box-shadow, border-color; transition-duration: 320ms; transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+    .company-card:hover { transform: translateY(-6px); box-shadow: 0 24px 48px -20px rgba(99, 102, 241, 0.5); }
+
+    .tab-press { transition-property: color, transform; transition-duration: 180ms; transition-timing-function: ease; }
+    .tab-press:active { transform: scale(0.93); }
+
+    @keyframes bounceIn { 0% { opacity: 0; transform: scale(0.55); } 65% { opacity: 1; transform: scale(1.08); } 100% { transform: scale(1); } }
+    .animate-bounce-in { animation: bounceIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 </style>

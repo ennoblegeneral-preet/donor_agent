@@ -72,41 +72,44 @@
 {% set ns = namespace(pending=0) %}
 {% for c in companies %}{% if c.status not in ['scored', 'failed_research'] %}{% set ns.pending = ns.pending + 1 %}{% endif %}{% endfor %}
 
+{% set approved_count = companies | selectattr('approval_status', 'equalto', 'approved') | list | length %}
+{% set tier_a_count = companies | selectattr('tier', 'equalto', 'Tier A') | list | length %}
+{% set zoho_count = companies | selectattr('upload_status', 'equalto', 'uploaded') | list | length %}
 <div class="grid grid-cols-2 md:grid-cols-5 gap-gutter mb-stack-lg">
-    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:0ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-primary/70 text-[20px]">corporate_fare</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Total Companies</h3>
         </div>
-        <div class="font-display-lg text-display-lg text-on-surface">{{ count | commas }}</div>
+        <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ count }}">0</div>
     </div>
-    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:60ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-secondary/70 text-[20px]">hourglass_empty</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Pending Research</h3>
         </div>
-        <div class="font-display-lg text-display-lg text-on-surface">{{ ns.pending | commas }}</div>
+        <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ ns.pending }}">0</div>
     </div>
-    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:120ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-primary-container/70 text-[20px]">check_circle</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Approved</h3>
         </div>
-        <div class="font-display-lg text-display-lg text-on-surface">{{ companies | selectattr('approval_status', 'equalto', 'approved') | list | length | commas }}</div>
+        <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ approved_count }}">0</div>
     </div>
-    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:180ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-tertiary/70 text-[20px]">workspace_premium</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Tier-A</h3>
         </div>
-        <div class="font-display-lg text-display-lg text-on-surface text-tertiary">{{ companies | selectattr('tier', 'equalto', 'Tier A') | list | length | commas }}</div>
+        <div class="font-display-lg text-display-lg text-on-surface text-tertiary countup" data-target="{{ tier_a_count }}">0</div>
     </div>
-    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200">
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:240ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-secondary/70 text-[20px]">cloud_done</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">In Zoho</h3>
         </div>
-        <div class="font-display-lg text-display-lg text-on-surface">{{ companies | selectattr('upload_status', 'equalto', 'uploaded') | list | length | commas }}</div>
+        <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ zoho_count }}">0</div>
     </div>
 </div>
 
@@ -147,26 +150,39 @@
 
 {% if not companies %}
 <div id="emptyState" class="glass-panel rounded-xl p-stack-lg text-center" style="padding: 4rem 2rem;">
-    <div class="text-[48px] mb-4">📂</div>
+    <div class="text-[48px] mb-4 animate-bounce-in">📂</div>
     <p class="font-body-md text-body-md text-on-surface-variant">No companies in the database yet. Add one above to kick off the multi-agent pipeline.</p>
 </div>
 {% else %}
 
-<!-- Filter & Sort Bar -->
-<div class="flex flex-col md:flex-row justify-between items-center mb-stack-md gap-4 border-b border-[#2E3245] pb-2">
+<!-- Main View Tabs: All Companies vs Search -->
+<div class="flex items-center gap-6 mb-stack-md border-b border-[#2E3245]" id="mainViewTabs">
+    <button type="button" class="main-view-tab tab-press font-label-lg text-label-lg text-primary border-b-2 border-primary pb-3 px-1 whitespace-nowrap" data-view="all" onclick="switchMainView('all')">All Companies</button>
+    <button type="button" class="main-view-tab tab-press font-label-lg text-label-lg text-on-surface-variant hover:text-on-surface pb-3 px-1 whitespace-nowrap flex items-center gap-1.5 transition-colors" data-view="search" onclick="switchMainView('search')">
+        <span class="material-symbols-outlined text-[18px]">search</span> Search
+    </button>
+</div>
+
+<!-- Search Panel (Search tab only) -->
+<div id="searchPanel" class="hidden mb-stack-md">
+    <div class="relative max-w-xl">
+        <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
+        <input id="companySearchTab" type="search" class="w-full bg-[#1A1D2E] border border-[#2E3245] rounded-lg pl-12 pr-4 py-3 font-body-lg text-body-lg text-on-surface focus:outline-none focus:border-primary" placeholder="Search companies by name…" autocomplete="off">
+    </div>
+    <p id="searchHint" class="font-body-sm text-body-sm text-on-surface-variant mt-2">Start typing to find a company. Matching results appear below — the full list stays untouched on the "All Companies" tab.</p>
+</div>
+
+<!-- Filter & Sort Bar (All Companies tab) -->
+<div class="flex flex-col md:flex-row justify-between items-center mb-stack-md gap-4 border-b border-[#2E3245] pb-2" id="allCompaniesBar">
     <div class="flex gap-6 overflow-x-auto w-full md:w-auto no-scrollbar" id="filterTabs">
-        <button class="filter-tab font-label-md text-label-md text-primary border-b-2 border-primary pb-2 whitespace-nowrap" data-filter="all">All</button>
-        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="researching">Researching</button>
-        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="scored">Scored</button>
-        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="tier-a">Tier-A</button>
-        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="tier-b">Tier-B</button>
-        <button class="filter-tab font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="prospect">Prospect</button>
+        <button class="filter-tab tab-press font-label-md text-label-md text-primary border-b-2 border-primary pb-2 whitespace-nowrap" data-filter="all">All</button>
+        <button class="filter-tab tab-press font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="researching">Researching</button>
+        <button class="filter-tab tab-press font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="scored">Scored</button>
+        <button class="filter-tab tab-press font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="tier-a">Tier-A</button>
+        <button class="filter-tab tab-press font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="tier-b">Tier-B</button>
+        <button class="filter-tab tab-press font-label-md text-label-md text-on-surface-variant hover:text-on-surface pb-2 whitespace-nowrap transition-colors" data-filter="prospect">Prospect</button>
     </div>
     <div class="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
-        <div class="relative">
-            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]">search</span>
-            <input id="companySearch" type="search" class="bg-[#1A1D2E] border border-[#2E3245] rounded pl-8 pr-3 py-1.5 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary" placeholder="Search companies" style="width: 180px;">
-        </div>
         {% if role == 'admin' %}
         {% set owners = companies | map(attribute='created_by') | select('string') | reject('equalto', '') | unique | list | sort %}
         <span class="font-body-sm text-body-sm text-on-surface-variant">Owner:</span>
@@ -253,8 +269,8 @@
     {% set is_pending = c.get('status', 'pending') not in ['scored', 'failed_research'] %}
     {% set score = c.get('score') %}
     {% set ring_color = 'text-tertiary' if c.get('tier') == 'Tier A' else ('text-primary' if c.get('tier') == 'Tier B' else ('text-amber-500' if c.get('tier') in ['Tier C', 'Nurture', 'Medium', 'Medium Fit'] else 'text-on-surface-variant')) %}
-    <div class="company-card glass-card rounded-xl p-stack-md flex flex-col hover:border-primary/50 transition-colors duration-300 group {% if c.tier == 'Tier A' %}border-t-2 border-t-tertiary{% endif %}"
-         style="position:relative;"
+    <div class="company-card glass-card rounded-xl p-stack-md flex flex-col hover:border-primary/50 transition-colors duration-300 group animate-fade-in-up {% if c.tier == 'Tier A' %}border-t-2 border-t-tertiary{% endif %}"
+         style="position:relative; animation-delay:{{ (loop.index0 % 12) * 40 }}ms;"
          data-name="{{ c.company_name | lower }}"
          data-status="{{ c.status }}"
          data-tier="{{ c.tier or '' }}"
@@ -308,7 +324,11 @@
         {% set fin = c.get('financial_data') or {} %}
         {% set fy_list = fin.get('fiscal_years') or [] %}
         {% set latest_turnover = (fin.get('turnover') or {}).get(fy_list[0]) if fy_list else None %}
-        <div class="grid grid-cols-3 gap-2 mb-stack-md py-3 border-t border-[#2E3245]/50">
+        {% set csr_d = c.get('csr_data') or {} %}
+        {% set card_csr_spend = csr_d.get('csr_spend') %}
+        {% set card_csr_unspent = csr_d.get('csr_unspent_amount') %}
+        {% set card_csr_year = csr_d.get('csr_spend_year') %}
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-stack-md py-3 border-t border-[#2E3245]/50">
             <div>
                 <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Sector</p>
                 <p class="font-body-md text-body-md text-on-surface truncate" style="font-size:12px;">{{ (c.get('research_json') or {}).get('industry', '-') }}</p>
@@ -324,6 +344,16 @@
                 </p>
             </div>
             <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">CSR Spend{% if card_csr_year %} <span class="opacity-70 font-normal">({{ card_csr_year }})</span>{% endif %}</p>
+                <p class="font-body-md text-body-md text-emerald-400 truncate font-semibold" style="font-size:12px;">
+                    {% if card_csr_spend is not none and card_csr_spend != '-' %}
+                        ₹{{ card_csr_spend | commas }} Cr
+                    {% else %}
+                        -
+                    {% endif %}
+                </p>
+            </div>
+            <div>
                 <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Lead Status</p>
                 <p class="font-body-md text-body-md {% if c.get('record_stage') == 'Prospect' %}text-tertiary font-medium{% else %}text-on-surface-variant italic{% endif %}" style="font-size:12px;">{{ c.get('record_stage', 'New') }}</p>
             </div>
@@ -331,8 +361,13 @@
         {% set card_partners = (c.get('csr_data', {}) or {}).get('implementation_partners') or (c.get('research_json', {}) or {}).get('existing_implementation_partners') or [] %}
         {% set card_comm = (c.get('csr_data', {}) or {}).get('committee_members') or c.get('committee_members') or [] %}
         {% set card_comm_li = c.get('_committee_members_linkedin_lookup') or {} %}
-        {% if card_partners or card_comm %}
+        {% if card_partners or card_comm or (card_csr_unspent is not none and card_csr_unspent > 0) %}
         <div class="flex items-center gap-2 mb-3 flex-wrap font-body-sm" style="font-size: 11px;">
+            {% if card_csr_unspent is not none and card_csr_unspent > 0 %}
+            <span style="background: rgba(239, 68, 68, 0.15); color: #f87171; padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.3);" title="CSR Unspent Amount: ₹{{ card_csr_unspent | commas }} Cr">
+                💰 Unspent: ₹{{ card_csr_unspent | commas }} Cr
+            </span>
+            {% endif %}
             {% if card_partners %}
             <span style="background: rgba(168, 85, 247, 0.15); color: #d8b4fe; padding: 2px 8px; border-radius: 6px; border: 1px solid rgba(168, 85, 247, 0.3);" title="{{ card_partners | join(', ') }}">
                 🤝 {{ card_partners | length }} NGO Partner{% if card_partners | length > 1 %}s{% endif %}
@@ -619,6 +654,22 @@
         }, 1500);
     }
 
+    // Animate the stat tiles counting up from 0 on load
+    function animateCountUp(el, target, duration = 900) {
+        const start = performance.now();
+        function tick(now) {
+            const progress = Math.min((now - start) / duration, 1);
+            const eased = 1 - Math.pow(1 - progress, 3);
+            el.textContent = Math.round(eased * target).toLocaleString();
+            if (progress < 1) requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+    }
+    document.querySelectorAll('.countup').forEach(el => {
+        const target = parseInt(el.dataset.target || '0', 10);
+        animateCountUp(el, target);
+    });
+
     // Rebuild the bulk cards after a browser refresh while the batch is running
     // (or after it has completed). Main company cards are loaded from the database.
     window.addEventListener('DOMContentLoaded', () => {
@@ -632,14 +683,45 @@
         trackBulkProgress(batch.companies.map(c => c.company_id), statusEl);
     });
 
-    // Search + filter tabs
+    // Main view: "All Companies" (unfiltered list + status tabs) vs "Search" (query-driven results)
+    let mainView = 'all';
     let activeFilter = 'all';
+
+    function switchMainView(view) {
+        mainView = view;
+        document.querySelectorAll('.main-view-tab').forEach(t => {
+            const active = t.dataset.view === view;
+            t.classList.toggle('text-primary', active);
+            t.classList.toggle('border-b-2', active);
+            t.classList.toggle('border-primary', active);
+            t.classList.toggle('text-on-surface-variant', !active);
+        });
+        document.getElementById('searchPanel')?.classList.toggle('hidden', view !== 'search');
+        document.getElementById('allCompaniesBar')?.classList.toggle('hidden', view !== 'all');
+        if (view === 'search') {
+            document.getElementById('companySearchTab')?.focus();
+        }
+        applyFilters();
+    }
+
     function applyFilters() {
-        const query = document.getElementById('companySearch')?.value.trim().toLowerCase() || '';
+        if (mainView === 'search') {
+            const query = document.getElementById('companySearchTab')?.value.trim().toLowerCase() || '';
+            let visibleCount = 0;
+            document.querySelectorAll('.company-card').forEach(card => {
+                const visible = query.length > 0 && card.dataset.name.includes(query);
+                card.style.display = visible ? '' : 'none';
+                if (visible) visibleCount++;
+            });
+            document.getElementById('searchHint')?.classList.toggle('hidden', query.length !== 0);
+            document.getElementById('noResultsMsg')?.classList.toggle('hidden', query.length === 0 || visibleCount !== 0);
+            return;
+        }
+
+        document.getElementById('searchHint')?.classList.add('hidden');
         const ownerFilter = document.getElementById('ownerFilter')?.value || '';
         let visibleCount = 0;
         document.querySelectorAll('.company-card').forEach(card => {
-            const matchesSearch = card.dataset.name.includes(query);
             const matchesOwner = !ownerFilter || card.dataset.owner === ownerFilter;
             const matchesFilter = activeFilter === 'all'
                 || (activeFilter === 'researching' && card.dataset.status !== 'scored' && card.dataset.status !== 'failed_research')
@@ -647,13 +729,13 @@
                 || (activeFilter === 'tier-a' && card.dataset.tier === 'Tier A')
                 || (activeFilter === 'tier-b' && card.dataset.tier === 'Tier B')
                 || (activeFilter === 'prospect' && card.dataset.stage === 'Prospect');
-            const visible = matchesSearch && matchesOwner && matchesFilter;
+            const visible = matchesOwner && matchesFilter;
             card.style.display = visible ? '' : 'none';
             if (visible) visibleCount++;
         });
         document.getElementById('noResultsMsg')?.classList.toggle('hidden', visibleCount !== 0);
     }
-    document.getElementById('companySearch')?.addEventListener('input', applyFilters);
+    document.getElementById('companySearchTab')?.addEventListener('input', applyFilters);
     document.getElementById('ownerFilter')?.addEventListener('change', applyFilters);
     document.querySelectorAll('.filter-tab').forEach(tab => {
         tab.addEventListener('click', () => {
