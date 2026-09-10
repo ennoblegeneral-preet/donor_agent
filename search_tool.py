@@ -9,7 +9,6 @@ from datetime import date
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-import contextvars
 from error_utils import classify_error
 from redis_cache import get_json, set_json, make_key
 
@@ -17,62 +16,6 @@ load_dotenv()
 
 _active_search_keys = {}
 _search_keys_lock = threading.Lock()
-
-# Web-search credit counter for the current pipeline run. Every real search
-# call (contact search, CSR search, education search, etc.) actually happens
-# inside a NESTED ThreadPoolExecutor worker thread for concurrency - a plain
-# threading.local() tracker would be invisible to those worker threads (each
-# gets its own separate thread-local storage), so nothing would ever get
-# counted. contextvars.ContextVar, combined with submit_with_context() below
-# to explicitly propagate the context into every executor.submit() call,
-# makes the same tracker dict visible across all of a pipeline run's worker
-# threads while still keeping concurrent company runs isolated from each
-# other (each run's start_search_tracking() call creates its own dict in its
-# own context). A lock guards the increments since multiple stage threads can
-# now genuinely race on the same shared dict.
-_search_tracker = contextvars.ContextVar("search_tracker", default=None)
-_search_tracker_lock = threading.Lock()
-
-
-def start_search_tracking():
-    """Call at the start of a pipeline run to begin counting web-search API calls."""
-    _search_tracker.set({"serper_calls": 0, "tavily_calls": 0, "cache_hits": 0, "total_calls": 0})
-
-
-def get_tracked_search_usage():
-    """Returns the accumulated search-usage dict for the current context, or
-    None if start_search_tracking() was never called on it."""
-    return _search_tracker.get()
-
-
-def _record_search_call(provider: str):
-    tracker = _search_tracker.get()
-    if tracker is None:
-        return
-    key = f"{provider}_calls"
-    with _search_tracker_lock:
-        tracker[key] = tracker.get(key, 0) + 1
-        tracker["total_calls"] += 1
-
-
-def _record_search_cache_hit():
-    tracker = _search_tracker.get()
-    if tracker is None:
-        return
-    with _search_tracker_lock:
-        tracker["cache_hits"] += 1
-
-
-def submit_with_context(executor, fn, *args, **kwargs):
-    """executor.submit() that propagates the CURRENT context (including the
-    search-credit tracker ContextVar) into the worker thread. Plain
-    executor.submit(fn, *args) does NOT inherit the submitting thread's
-    context - each worker thread starts with a fresh, empty context - so any
-    ContextVar-based tracking set up before the submit() call would otherwise
-    silently vanish inside every concurrent search stage."""
-    ctx = contextvars.copy_context()
-    return executor.submit(ctx.run, fn, *args, **kwargs)
-
 
 def set_search_context(search_keys: dict, username: str = None):
     """Set active search provider and API key."""
@@ -303,14 +246,12 @@ def _execute_search(query: str, max_results: int = 5, include_raw_content: bool 
     cached = get_json(cache_key)
     if cached is not None:
         print(f"[Search Cache] Hit: {query}")
-        _record_search_cache_hit()
         return cached
 
     if provider == "serper":
         result = _serper_search(query, max_results=max_results, api_key=api_key)
     else:
         result = _tavily_search_with_limit(query, max_results=max_results, include_raw_content=include_raw_content, api_key=api_key)
-    _record_search_call(provider)
 
     set_json(cache_key, result)
     return result
@@ -370,7 +311,7 @@ def search_contact_sources(company_name: str, website: str = None) -> dict:
 
     errors = []
     with ThreadPoolExecutor(max_workers=len(search_stages)) as executor:
-        futures = {submit_with_context(executor, _search_stage_contact, stage): stage for stage in search_stages}
+        futures = {executor.submit(_search_stage_contact, stage): stage for stage in search_stages}
         for future in as_completed(futures):
             results, error = future.result()
             collected.extend(results)
@@ -435,17 +376,17 @@ def search_company_csr_info(company_name: str, website: str = None):
             "query": f'"{company_name}" CSR ("total CSR expenditure" OR "CSR spend" OR "CSR obligation" OR "actual spend" OR "amount spent") (crore OR lakh) ("FY25" OR "FY 2024-25" OR "FY24" OR "FY 2023-24" OR "FY23") {" ".join(_recent_indian_fiscal_years())} ("annual report" OR BRSR OR site:csrbox.org OR "National CSR Portal")',
         },
         # 2. Education Previous Year CSR Spend & Sector Breakdown
-        # {
-        #     "priority": 1,
-        #     "source_type": "Education CSR Spend",
-        #     "query": f'"{company_name}" CSR ("education spend" OR "spent on education" OR "education budget" OR "education sector" OR "promotion of education" OR "Schedule VII" OR "school education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "FY 2023-24" OR "FY 2024-25" OR "annual report")',
-        # },
-        # # 3. Past 3 Years CSR Spend History & Trend
-        # {
-        #     "priority": 1,
-        #     "source_type": "Past 3 Years CSR Spend",
-        #     "query": f'"{company_name}" CSR ("past 3 years" OR "last 3 years" OR "three financial years" OR "3-year average" OR "average net profit" OR "CSR trend" OR "FY 2022-23" OR "FY 2023-24" OR "FY 2024-25" OR "FY23" OR "FY24" OR "FY25") (expenditure OR spend OR obligation OR crore)',
-        # },
+        {
+            "priority": 1,
+            "source_type": "Education CSR Spend",
+            "query": f'"{company_name}" CSR ("education spend" OR "spent on education" OR "education budget" OR "education sector" OR "promotion of education" OR "Schedule VII" OR "school education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "FY 2023-24" OR "FY 2024-25" OR "annual report")',
+        },
+        # 3. Past 3 Years CSR Spend History & Trend
+        {
+            "priority": 1,
+            "source_type": "Past 3 Years CSR Spend",
+            "query": f'"{company_name}" CSR ("past 3 years" OR "last 3 years" OR "three financial years" OR "3-year average" OR "average net profit" OR "CSR trend" OR "FY 2022-23" OR "FY 2023-24" OR "FY 2024-25" OR "FY23" OR "FY24" OR "FY25") (expenditure OR spend OR obligation OR crore)',
+        },
         # 4. CSR Overview & Initiatives
         {
             "priority": 2,
@@ -465,7 +406,7 @@ def search_company_csr_info(company_name: str, website: str = None):
     errors = []
 
     with ThreadPoolExecutor(max_workers=len(csr_stages)) as executor:
-        futures = {submit_with_context(executor, _search_stage_csr, stage, company_name, seen_urls): stage for stage in csr_stages}
+        futures = {executor.submit(_search_stage_csr, stage, company_name, seen_urls): stage for stage in csr_stages}
         for future in as_completed(futures):
             results, error = future.result()
             collected.extend(results)
@@ -483,44 +424,6 @@ def search_company_csr_info(company_name: str, website: str = None):
     if not collected and errors:
         result["error"] = errors[0]
     return result
-
-
-def search_company_geography(company_name: str, website: str = None) -> dict:
-    """Fallback-only search fired when the main CSR/contact/partner searches didn't
-    surface any text naming WHERE a company's CSR programs actually run (as opposed
-    to just its HQ). Those searches only find program-location info incidentally,
-    so this queries for beneficiary states/districts directly instead of relying on
-    a lucky mention - kept as a separate opt-in call (not a always-on stage) since
-    it costs another search credit per company."""
-    query = (
-        f'"{company_name}" CSR ("beneficiary states" OR "beneficiary districts" OR "program locations" OR '
-        f'"operational geography" OR "states covered" OR "implemented in" OR "CSR interventions in" OR '
-        f'"reach across" OR district) (education OR school OR community OR beneficiaries OR villages)'
-    )
-    try:
-        results = _execute_search(query, max_results=5, include_raw_content=True)
-    except Exception as e:
-        print(f"[Search Warning] Geography fallback search failed for '{company_name}': {e}")
-        return {"sources": [], "error": classify_error(e)}
-
-    sources = []
-    seen_urls = set()
-    for r in results.get("results", []):
-        url = r.get("url", "")
-        text = r.get("raw_content") or r.get("content", "")
-        if not url or url in seen_urls:
-            continue
-        if not _is_india_result(url, text):
-            continue
-        if text and len(text) > 150:
-            seen_urls.add(url)
-            sources.append({
-                "priority": 1,
-                "source_type": "Geography Fallback",
-                "url": url,
-                "text": text[:4000],
-            })
-    return {"sources": sources}
 
 
 SCREENER_HEADERS = {
@@ -820,7 +723,7 @@ def search_education_fields(company_name: str, website: str = None) -> dict:
 
     output = {}
     with ThreadPoolExecutor(max_workers=len(EDUCATION_FIELD_QUERIES)) as executor:
-        futures = [submit_with_context(executor, search_one_field, field) for field in EDUCATION_FIELD_QUERIES]
+        futures = [executor.submit(search_one_field, field) for field in EDUCATION_FIELD_QUERIES]
         for future in as_completed(futures):
             field, details = future.result()
             output[field] = details
@@ -984,3 +887,4 @@ def search_unlisted_company_financials(company_name: str, website: str = None) -
     return {
         "results": collected_results
     }
+

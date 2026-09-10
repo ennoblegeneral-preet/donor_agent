@@ -12,23 +12,21 @@ CSR_FINANCIAL_KEYWORDS = {
     "csr", "annexure", "schedule vii", "spent", "spend", "unspent", "budget", "obligation",
     "crore", "lakh", "education", "school", "committee", "beneficiaries", "implementing",
     "partner", "program", "project", "percentage", "fy2", "fy 20", "prescribed", "amount",
-    "section 135", "average net profit", "set off", "csr policy", "ongoing project",
-    "unspent csr", "transfer", "relief fund", "consolidated", "standalone",
-    "expenditure", "shortfall", "surplus", "action plan", "csr-1"
+    "section 135", "average net profit", "set off", "csr policy", "ongoing project"
 }
 
-def filter_csr_annexure_text(text: str, max_chars: int = 15000) -> str:
+def filter_csr_annexure_text(text: str, max_chars: int = 4500) -> str:
     """Filters large annual report text to only paragraphs with CSR financial data and tables."""
-    if not text or len(text) <= max_chars:
+    if not text or len(text) <= 1500:
         return text or ""
-    paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 10]
+    paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 15]
     selected = []
     seen = set()
     total_len = 0
     for p in paragraphs:
         p_lower = p.lower()
-        if any(k in p_lower for k in CSR_FINANCIAL_KEYWORDS) or any(c.isdigit() for c in p):
-            snip = p_lower[:60]
+        if any(k in p_lower for k in CSR_FINANCIAL_KEYWORDS):
+            snip = p_lower[:50]
             if snip in seen:
                 continue
             seen.add(snip)
@@ -37,7 +35,7 @@ def filter_csr_annexure_text(text: str, max_chars: int = 15000) -> str:
             if total_len >= max_chars:
                 break
     if not selected:
-        return text[:max_chars]
+        return text[:2500]
     return "\n\n".join(selected)
 
 
@@ -56,7 +54,7 @@ def extract_csr_data(pdf_text: str, company_name: str):
     Groq API call hi fail hui (jaise rate limit), taaki caller "genuinely
     kuch nahi mila" aur "extraction service hi fail ho gayi" mein farak kar sake.
     """
-    filtered_text = filter_csr_annexure_text(pdf_text, max_chars=15000)
+    filtered_text = filter_csr_annexure_text(pdf_text, max_chars=4500)
 
     prompt = f"""
     From the CSR Annexure / Board's Report section of the annual report, extract the
@@ -67,43 +65,56 @@ def extract_csr_data(pdf_text: str, company_name: str):
     3. Implementation Partners (NGO names)
     4. Number of Beneficiaries
     5. Key CSR Programs
-    6. Total CSR Spend (in ₹ Crores, current/latest reported year).
-       IMPORTANT:
-       - Prefer the CONSOLIDATED CSR spend if both Consolidated and Standalone figures exist.
-       - If the amount is given in Lakhs (e.g. 1,357.28 Lakhs or 623.81 Lakhs), convert it to Crores (divide by 100, e.g. 13.57 or 6.24).
-       - Include total spent from footnote details if stated (e.g. 'spent a total of `1,357.28 lakhs').
-       - If no company-wide total exists anywhere, set csr_spend to null.
+    6. Total CSR Spend (in Crores, current/latest reported year). IMPORTANT: this must be
+       the company's CONSOLIDATED "Total Amount Spent for the Financial Year" figure (from
+       the Schedule VII / CSR Annexure compliance table), NOT the spend on a single focus
+       area, program, or implementing agency. If the text only has a program-wise or
+       area-wise breakup and no company-wide total anywhere, set csr_spend to null - do not
+       treat a smaller sub-item value as the total.
     7. CSR Spend Financial Year - the financial year that the csr_spend figure belongs to
-       (e.g. "FY24" or "FY 2023-24"). ALWAYS include the "csr_spend_year" key in the JSON output.
-    8. CSR Unspent Amount (in ₹ Crores).
-       - Look for unspent amounts transferred to the Unspent CSR Account under Section 135(6), or unspent amounts under Section 135(5).
-       - If multiple unspent sums are mentioned (e.g., 429.84 Lakhs + 24.75 Lakhs), sum them up and convert to Crores (e.g. 4.55).
-       - If the company spent 100% of its CSR obligation and unspent is stated as Nil / 0 / None, return 0 (number 0, NOT null).
-       - If the unspent section is genuinely missing or not found, return null.
-    9. Previous years' CSR Spend (in ₹ Crores, as many years as appear in the table, e.g. {{"FY24": 13.57, "FY23": 10.2}}).
-       If in Lakhs in the report, convert to Crores.
-    10. Education Spend (current year, in ₹ Crores) - how much was spent on "Education" within
-        the CSR focus-area breakdown table.
-    11. Education Spend Percentage (current year) - education spend as a percentage of total CSR spend (e.g. 35.5).
+       (e.g. "FY24" or "FY 2023-24"). In the Annexure table this is usually written at the
+       top of the report or in a row label (look for a "Financial Year" row/heading).
+       IMPORTANT: ALWAYS include the "csr_spend_year" key in the JSON output, even if its
+       value is null - never omit or drop this key entirely.
+    8. CSR Unspent Amount (in Crores, current/latest reported year - may be written as
+       "amount unspent" or "amount transferred to unspent CSR account").
+    9. Previous years' CSR Spend (as many years as appear in the table, usually 3 years,
+       each with its fiscal year label, e.g. "FY23", "FY24", etc.). This may appear in the
+       CSR Annexure "Details of CSR spent during the financial year" trend table, or in the
+       CSR KPIs of the BRSR (Business Responsibility and Sustainability Report) section -
+       check both places. If only the current year's number is found and there is no
+       multi-year comparison, keep this field as an empty object {{}} - do not attach a
+       number to the wrong year. IMPORTANT: include ONLY the years for which you actually
+       found a number - do not add a year with a null value; if a year's number was not
+       found, do not put that year in the object at all (do not even write the key).
+    10. Education Spend (current year, in Crores) - how much was spent on "Education" within
+        the CSR focus-area breakdown. This is written in the area-wise/theme-wise breakup
+        table of the CSR Annexure.
+    11. Education Spend Percentage (current year) - education spend as a percentage of total
+        CSR spend. Formula: (Education Spend / Total CSR Spend) * 100. If this percentage is
+        stated in the report, extract it; otherwise set it to null.
     12. Education Spend History (previous years) - as many years as are available.
         Format: {{"FY24": {{"amount": <crores>, "percentage": <pct of that year's CSR spend>}}, ...}}
+        If the percentage is not found, set "percentage": null, but "amount" is required.
 
     Text:
     {filtered_text}
 
     Return the answer in JSON format. If data is not found, use null / an empty list /
-    an empty object. Fill in only the actual focus areas / names / NGOs found in the text:
+    an empty object. IMPORTANT: the example below is only to show the FORMAT - do not copy
+    it literally. Fill in only the actual focus areas / names / NGOs found in the text, or
+    give an empty list [] if genuinely nothing is found:
     {{
         "focus_areas": ["<text mein mile actual focus area, e.g. Education>", "..."],
         "committee_members": ["<text mein mila actual committee member ka naam>", "..."],
         "implementation_partners": ["<text mein mile actual NGO/partner ka naam>", "..."],
         "beneficiaries": <number or null>,
         "key_programs": ["<text mein mile actual program ka naam>", "..."],
-        "csr_spend": <number in Crores or null>,
+        "csr_spend": <number or null>,
         "csr_spend_year": <string or null, e.g. "FY24">,
-        "csr_unspent_amount": <number in Crores or null>,
-        "csr_spend_history": {{"FY24": <number in Crores>, "FY23": <number in Crores>}},
-        "education_spend": <number in Crores or null>,
+        "csr_unspent_amount": <number or null>,
+        "csr_spend_history": {{"FY24": <number>, "FY23": <number>, "FY22": <number>}},
+        "education_spend": <number or null>,
         "education_spend_percentage": <number or null>,
         "education_spend_history": {{"FY24": {{"amount": <crores>, "percentage": <pct>}}, "FY23": {{...}}}}
     }}
@@ -388,4 +399,3 @@ def extract_unlisted_financial_data(text: str, company_name: str) -> dict:
     except Exception as e:
         print(f"[Error] Unlisted financial extraction failed: {e}")
         return {}
-
