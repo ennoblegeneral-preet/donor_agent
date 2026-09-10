@@ -124,7 +124,7 @@ MAX_ZOHO_BULK = 50
 # N companies fires N companies' worth of concurrent Tavily searches at once,
 # which blows through Tavily's rate limit even with the per-call semaphore in
 # search_tool.py (that one only caps instantaneous concurrency, not sustained rate).
-_pipeline_concurrency = threading.Semaphore(10)
+_pipeline_concurrency = threading.Semaphore(4)
 
 
 
