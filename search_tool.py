@@ -12,6 +12,7 @@ import threading
 import contextvars
 from error_utils import classify_error
 from redis_cache import get_json, set_json, make_key
+from pdf_utils import _headers_for
 
 load_dotenv()
 
@@ -77,34 +78,33 @@ def submit_with_context(executor, fn, *args, **kwargs):
 def set_search_context(search_keys: dict, username: str = None):
     """Set active search provider and API key."""
     if search_keys:
+        sanitized = {
+            "provider": (search_keys.get("provider") or "serper").lower().strip(),
+            "api_key": (search_keys.get("api_key") or "").strip().strip('"').strip("'"),
+            # "auto" (default) = deep-scrape ON for Serper, OFF for Tavily.
+            # "on"/"off" = manual override regardless of provider.
+            "deep_scrape": (search_keys.get("deep_scrape") or "auto").lower().strip(),
+        }
         with _search_keys_lock:
-            _active_search_keys["current"] = search_keys
+            _active_search_keys["current"] = sanitized
             if username:
-                _active_search_keys[username] = search_keys
+                _active_search_keys[username] = sanitized
 
-def get_search_context() -> dict:
+
+def get_search_context(username: str = None) -> dict:
     """Get active search configuration."""
     with _search_keys_lock:
+        if username and username in _active_search_keys:
+            return _active_search_keys[username]
         return _active_search_keys.get("current", {}) or {}
+
 
 def get_effective_search_config(username: str = None) -> dict:
     """
     Returns effective search provider and API key for the current context/user,
     or falls back to active session / database / .env configuration.
     """
-    ctx = get_search_context()
-    user_provider = (ctx.get("provider") or "").lower().strip()
-    user_api_key = (ctx.get("api_key") or "").strip()
-
-    if user_provider and user_api_key:
-        return {
-            "provider": user_provider,
-            "api_key": user_api_key,
-            "source": "user",
-            "configured": True,
-        }
-
-    # If not in cache, check username or active Flask session
+    # 1. Check active username from arg or Flask session
     active_username = username
     if not active_username:
         try:
@@ -114,24 +114,51 @@ def get_effective_search_config(username: str = None) -> dict:
         except Exception:
             pass
 
+    # 2. Check user DB / context for active user
     if active_username:
+        with _search_keys_lock:
+            user_ctx = _active_search_keys.get(active_username)
+        if user_ctx and user_ctx.get("api_key"):
+            return {
+                "provider": user_ctx.get("provider", "serper"),
+                "api_key": user_ctx.get("api_key", ""),
+                "deep_scrape": user_ctx.get("deep_scrape", "auto"),
+                "source": "user_context",
+                "configured": True,
+            }
         try:
             from db import get_user_search_keys
             db_keys = get_user_search_keys(active_username) or {}
             db_provider = (db_keys.get("provider") or "serper").lower().strip()
-            db_api_key = (db_keys.get("api_key") or "").strip()
+            db_api_key = (db_keys.get("api_key") or "").strip().strip('"').strip("'")
             if db_provider and db_api_key:
                 set_search_context(db_keys, username=active_username)
                 return {
                     "provider": db_provider,
                     "api_key": db_api_key,
+                    "deep_scrape": (db_keys.get("deep_scrape") or "auto").lower().strip(),
                     "source": "user_db",
                     "configured": True,
                 }
         except Exception:
             pass
 
-    # Fallback to system .env configuration
+    # 3. Check generic current context
+    ctx = get_search_context()
+    user_provider = (ctx.get("provider") or "").lower().strip()
+    user_api_key = (ctx.get("api_key") or "").strip().strip('"').strip("'")
+
+    if user_provider and user_api_key:
+        return {
+            "provider": user_provider,
+            "api_key": user_api_key,
+            "deep_scrape": (ctx.get("deep_scrape") or "auto").lower().strip(),
+            "source": "user",
+            "configured": True,
+        }
+
+    # 4. Fallback to system .env configuration
+    env_deep_scrape = (os.getenv("DEEP_SCRAPE") or "auto").lower().strip()
     env_provider = os.getenv("SEARCH_PROVIDER", "").lower().strip()
     serper_key = (os.getenv("SERPER_API_KEY") or os.getenv("serper_api_key") or "").strip().strip('"').strip("'")
     tavily_key = (os.getenv("TAVILY_API_KEY") or os.getenv("tavily_api_key") or "").strip().strip('"').strip("'")
@@ -143,6 +170,7 @@ def get_effective_search_config(username: str = None) -> dict:
         return {
             "provider": "serper",
             "api_key": serper_key,
+            "deep_scrape": env_deep_scrape,
             "source": "env",
             "configured": True,
         }
@@ -150,6 +178,7 @@ def get_effective_search_config(username: str = None) -> dict:
         return {
             "provider": "tavily",
             "api_key": tavily_key,
+            "deep_scrape": env_deep_scrape,
             "source": "env",
             "configured": True,
         }
@@ -157,10 +186,94 @@ def get_effective_search_config(username: str = None) -> dict:
     return {
         "provider": user_provider or env_provider or "serper",
         "api_key": "",
+        "deep_scrape": env_deep_scrape,
         "source": "none",
         "configured": False,
     }
 
+
+
+def should_deep_scrape(username: str = None) -> bool:
+    """Decide whether Option A (fetch each result's full page via BeautifulSoup)
+    is active for the current run.
+
+    - deep_scrape == "on"  -> always ON  (manual override)
+    - deep_scrape == "off" -> always OFF (manual override)
+    - deep_scrape == "auto" (default) -> ON for Serper (whose results are just
+      Google snippets and would otherwise miss in-page data), OFF for Tavily
+      (which already returns full raw_content, so re-fetching is wasteful).
+    """
+    cfg = get_effective_search_config(username)
+    mode = (cfg.get("deep_scrape") or "auto").lower().strip()
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    return cfg.get("provider", "serper") == "serper"
+
+
+# Tags that never carry article/body content - stripped before text extraction.
+_JUNK_HTML_TAGS = [
+    "script", "style", "noscript", "nav", "footer", "header", "aside",
+    "form", "iframe", "svg", "button", "input", "select", "template",
+]
+
+
+def extract_html_text(url: str, max_chars: int = 8000) -> str:
+    """Option A core: download a normal web page and return its cleaned visible
+    text (boilerplate tags removed). Cached and best-effort - returns "" on any
+    failure (blocked bot, timeout, JS-only page) so the caller can safely fall
+    back to the Google snippet it already has. PDFs are NOT handled here - those
+    go through research_agent.extract_pdf_text()."""
+    if not url:
+        return ""
+    cache_key = make_key("html-text", url, max_chars)
+    cached = get_json(cache_key)
+    if isinstance(cached, dict) and isinstance(cached.get("text"), str):
+        return cached["text"]
+
+    text = ""
+    try:
+        resp = requests.get(url, headers=_headers_for(url), timeout=12)
+        resp.raise_for_status()
+        ctype = resp.headers.get("Content-Type", "").lower()
+        if "html" not in ctype and "text" not in ctype:
+            set_json(cache_key, {"text": ""})
+            return ""
+        soup = BeautifulSoup(resp.content, "html.parser")
+        for tag in soup(_JUNK_HTML_TAGS):
+            tag.decompose()
+        raw = soup.get_text(separator=" ")
+        text = " ".join(raw.split())[:max_chars]
+    except Exception as e:
+        print(f"[DeepScrape] Skipped {url}: {e}")
+        text = ""
+
+    set_json(cache_key, {"text": text})
+    return text
+
+
+def _deep_scrape_enrich(items, get_url, get_text, set_text, max_chars=8000, max_workers=6):
+    """For each item, fetch its full page text and replace the stored snippet
+    when the fetch yields more content. No-op (returns items unchanged) unless
+    deep scrape is active. Non-HTML/PDF urls and failed fetches keep the
+    original snippet, so this can only add data, never lose it."""
+    if not items or not should_deep_scrape():
+        return items
+
+    def work(item):
+        url = get_url(item) or ""
+        if not url or url.lower().endswith(".pdf"):
+            return
+        full = extract_html_text(url, max_chars=max_chars)
+        if full and len(full) > len(get_text(item) or ""):
+            set_text(item, full)
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as ex:
+        futures = [submit_with_context(ex, work, it) for it in items]
+        for _ in as_completed(futures):
+            pass
+    return items
 
 
 tavily_api_key = os.getenv("TAVILY_API_KEY")
@@ -271,12 +384,10 @@ def _serper_search(query: str, max_results: int = 5, api_key: str = None, retrie
 
 def _tavily_search_with_limit(query: str, max_results: int = 5, include_raw_content: bool = False, retries: int = 5, api_key: str = None) -> dict:
     """Wrapper around Tavily search with rate-limit semaphore and automatic retry."""
-    key = api_key or tavily_api_key
+    key = (api_key or tavily_api_key or "").strip().strip('"').strip("'")
     if not key:
         raise ValueError("No Tavily API key found. Please add your Tavily API key in Settings.")
-    client = TavilyClient(api_key=key) if (key and key != tavily_api_key) else tavily
-    if not client:
-        client = TavilyClient(api_key=key)
+    client = TavilyClient(api_key=key)
 
     with _tavily_semaphore:
         for attempt in range(retries):
@@ -342,40 +453,72 @@ def _search_stage_contact(stage: dict):
         return [], classify_error(e)
 
 
-def search_contact_sources(company_name: str, website: str = None) -> dict:
-    """ Target query design for contacts: company name + CSR Head / Sustainability / Head HR / CEO / HR / MD / Founder """
-    domain = urlparse(website).netloc.replace("www.", "") if website else None
+def _run_contact_stages(stages: list) -> tuple:
+    """Run a set of contact search stages concurrently. Returns (collected, errors)."""
     collected = []
-
-    search_stages = [
-        # 1. Direct Company Website Search
-        {
-            "priority": 1,
-            "source_type": "company_website",
-            "query": f'site:{domain} ("CSR Head" OR "Sustainability" OR "Head HR" OR "HR Head" OR "CEO" OR "HR" OR contact OR leadership)' if domain else f'"{company_name}" ("CSR Head" OR "Sustainability" OR "Head HR" OR "HR Head" OR "CEO" OR "HR" OR contact)',
-        },
-        # 2. LinkedIn Leadership Profile Search
-        {
-            "priority": 2,
-            "source_type": "LinkedIn",
-            "query": f'site:linkedin.com/in "{company_name}" ("CSR Head" OR "Head of CSR" OR "CSR Lead" OR "Sustainability" OR "Sustainability Head" OR "Head HR" OR "HR Head" OR "CHRO" OR "CEO" OR "Managing Director" OR "HR" OR "Founder")',
-        },
-        # 3. Directories, MCA Filings & CSRBOX Contact Search
-        {
-            "priority": 3,
-            "source_type": "Registry & Annual Report",
-            "query": f'"{company_name}" ("CSR Head" OR "Sustainability" OR "Head HR" OR "HR Head" OR "CEO" OR "HR" OR "Managing Director" OR "CSR Committee") ("contact" OR email OR Zaubacorp OR Tofler OR "annual report" OR site:csrbox.org)',
-        },
-    ]
-
     errors = []
-    with ThreadPoolExecutor(max_workers=len(search_stages)) as executor:
-        futures = {submit_with_context(executor, _search_stage_contact, stage): stage for stage in search_stages}
+    with ThreadPoolExecutor(max_workers=len(stages)) as executor:
+        futures = {submit_with_context(executor, _search_stage_contact, stage): stage for stage in stages}
         for future in as_completed(futures):
             results, error = future.result()
             collected.extend(results)
             if error:
                 errors.append(error)
+    return collected, errors
+
+
+def search_contact_sources(company_name: str, website: str = None) -> dict:
+    """Two-phase contact discovery: search for CSR / CSR-related people FIRST, and
+    only fall back to HR / HR Head / leadership queries if the CSR phase finds no
+    usable sources. This keeps HR contacts as a genuine fallback rather than
+    surfacing them alongside (and sometimes ahead of) the preferred CSR contact."""
+    domain = urlparse(website).netloc.replace("www.", "") if website else None
+
+    # --- Phase 1: CSR / CSR-related roles ONLY ---
+    csr_roles = '"CSR Head" OR "Head of CSR" OR "CSR Lead" OR "CSR Manager" OR "CSR Officer" OR "CSR Director" OR "Foundation Head" OR "Head Foundation" OR "Sustainability" OR "Sustainability Head" OR "ESG Head" OR "CSR Committee" OR "Social Consultant"'
+    csr_stages = [
+        {
+            "priority": 1,
+            "source_type": "company_website",
+            "query": f'site:{domain} ({csr_roles})' if domain else f'"{company_name}" ({csr_roles})',
+        },
+        {
+            "priority": 2,
+            "source_type": "LinkedIn",
+            "query": f'site:linkedin.com/in "{company_name}" ({csr_roles})',
+        },
+        {
+            "priority": 3,
+            "source_type": "Registry & Annual Report",
+            "query": f'"{company_name}" ({csr_roles}) ("contact" OR email OR Zaubacorp OR Tofler OR "annual report" OR site:csrbox.org)',
+        },
+    ]
+
+    collected, errors = _run_contact_stages(csr_stages)
+
+    # --- Phase 2: HR / leadership FALLBACK (only if no CSR contact source found) ---
+    if not collected:
+        hr_roles = '"Head HR" OR "HR Head" OR "HR Manager", "Senior HR" OR '
+        hr_stages = [
+            {
+                "priority": 4,
+                "source_type": "company_website",
+                "query": f'site:{domain} ({hr_roles} OR contact )' if domain else f'"{company_name}" ({hr_roles} OR contact)',
+            },
+            {
+                "priority": 5,
+                "source_type": "LinkedIn",
+                "query": f'site:linkedin.com/in "{company_name}" ({hr_roles})',
+            },
+            {
+                "priority": 6,
+                "source_type": "Registry & Annual Report",
+                "query": f'"{company_name}" ({hr_roles}) ("contact" OR email OR Zaubacorp OR Tofler OR "annual report")',
+            },
+        ]
+        hr_collected, hr_errors = _run_contact_stages(hr_stages)
+        collected.extend(hr_collected)
+        errors.extend(hr_errors)
 
     result = {"sources": collected}
     if not collected and errors:
@@ -780,6 +923,38 @@ EDUCATION_FIELD_QUERIES = {
     ],
 }
 
+# Generic corporate suffixes / filler words that don't identify a specific
+# company - stripped before matching so "Biocon Ltd" still matches a page that
+# only says "Biocon".
+_COMPANY_STOPWORDS = {
+    "ltd", "limited", "pvt", "private", "inc", "llp", "plc", "corp",
+    "corporation", "co", "company", "companies", "foundation", "trust",
+    "industries", "india", "indian", "enterprises", "group", "holdings",
+    "and", "the",
+}
+
+
+def _company_identifiers(company_name: str) -> list:
+    """Distinctive lowercase brand tokens that identify this company, with
+    generic corporate suffixes removed."""
+    cleaned = re.sub(r"[^a-z0-9 ]", " ", (company_name or "").lower())
+    return [t for t in cleaned.split() if len(t) >= 3 and t not in _COMPANY_STOPWORDS]
+
+
+def _mentions_company(company_name: str, *texts) -> bool:
+    """True if any distinctive company token appears in the given text(s).
+
+    Used to drop generic third-party/vendor pages (e.g. an 'Atal Tinkering Lab'
+    vendor's marketing page) that match the CSR keywords but never actually name
+    the company being researched - which was letting fields like STEM be marked
+    "Yes" on evidence that has nothing to do with the company."""
+    identifiers = _company_identifiers(company_name)
+    if not identifiers:
+        return True  # can't determine reliably -> don't over-filter
+    haystack = " ".join(t for t in texts if t).lower()
+    return any(token in haystack for token in identifiers)
+
+
 def search_education_fields(company_name: str, website: str = None) -> dict:
     domain = urlparse(website).netloc.replace("www.", "") if website else ""
 
@@ -794,17 +969,23 @@ def search_education_fields(company_name: str, website: str = None) -> dict:
                 query = f"{query} site:{domain}" if attempt == len(templates) else query
             print(f"[Education Search {attempt}/{len(templates)}] {field}: {query}")
             try:
-                result = _execute_search(query, max_results=5, include_raw_content=True)
+                result = _execute_search(query, max_results=10, include_raw_content=True)
                 for item in result.get("results", []):
                     url = item.get("url", "")
                     text = item.get("raw_content") or item.get("content", "")
                     if not url or url in seen_urls or not _is_india_result(url, text):
                         continue
+                    # Drop pages that never name the company - generic vendor /
+                    # keyword-match pages that would otherwise be mistaken for the
+                    # company's own CSR evidence.
+                    if not _mentions_company(company_name, item.get("title", ""), text):
+                        print(f"[Education Search] Dropped off-topic (no company mention): {url}")
+                        continue
                     seen_urls.add(url)
                     sources.append({
                         "url": url,
                         "title": item.get("title", ""),
-                        "text": text[:7000],
+                        "text": text[:8000],
                         "query": query,
                         "attempt": attempt,
                     })

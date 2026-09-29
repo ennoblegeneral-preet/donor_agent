@@ -46,7 +46,7 @@ def extract_pdf_text(pdf_url: str) -> str:
             raise ValueError(f"Response Content-Type is not PDF: {content_type}")
 
         # Limit to first 10MB to protect memory
-        max_bytes = 10 * 1024 * 1024
+        max_bytes = 100 * 1024 * 1024
         chunks = []
         size = 0
         for chunk in response.iter_content(chunk_size=128 * 1024):
@@ -145,6 +145,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
     # and preserve an already verified value if a later run is sparse or fails.
     education_evidence = {}
     education_error = None
+    education_search = {}
     try:
         education_search = search_education_fields(company_name, website)
         education_evidence, education_error = extract_education_fields(
@@ -164,16 +165,31 @@ def research_company(company_id: str, company_name: str, website: str = None):
             )
             missing_values = {"", "not found", "not publicly available", "none", "n/a", "na"}
             for field in education_fields:
-                new_value = education_evidence.get(field, {}).get("value", "Not Found")
-                old_value = previous_research.get(field, merged.get(field, "Not Found"))
-                new_status = education_evidence.get(field, {}).get("status")
-                if new_status == "found" or (
-                    new_status == "exhausted"
-                    and str(old_value).strip().lower() in missing_values
-                ):
+                field_ev = education_evidence.get(field, {})
+                new_value = field_ev.get("value", "Not Found")
+                new_status = field_ev.get("status")
+                # A value verified in an EARLIER run (source-backed) - safe to keep
+                # if this run can't verify. This is NOT the same as the current
+                # main-extraction guess, which we deliberately do not trust here.
+                prev_value = previous_research.get(field, "Not Found")
+                prev_verified = str(prev_value).strip().lower() not in missing_values
+                # The main extraction's value for this field - may be an unsourced
+                # guess (e.g. STEM "Yes" with no evidence), so only used as a last
+                # resort when the evidence search itself failed to run.
+                guess_value = merged.get(field, "Not Found")
+
+                if new_status == "found":
+                    # Evidence pass reached a source-grounded Yes/No -> authoritative.
                     merged[field] = new_value
+                elif new_status == "search_failed":
+                    # Couldn't search (API/network) -> can't disprove; keep a prior
+                    # verified value, else fall back to the main-extraction value.
+                    merged[field] = prev_value if prev_verified else guess_value
                 else:
-                    merged[field] = old_value
+                    # "exhausted": the evidence pass searched and found NOTHING. Do
+                    # not keep an unsourced guess - downgrade to Not Found, unless a
+                    # previous run had already verified this field.
+                    merged[field] = prev_value if prev_verified else "Not Found"
             research = CompanyResearch(**merged)
     except Exception as exc:
         education_error = {"type": "education_search_failed", "message": str(exc)}
@@ -200,6 +216,22 @@ def research_company(company_id: str, company_name: str, website: str = None):
 
     source_urls = "; ".join([s["url"] for s in sources[:5] if s.get("url")])
 
+    # Full, de-duplicated list of every source link the research pass actually
+    # used, each tagged with its category (source_type). Unlike source_urls above
+    # (top-5, joined string, category dropped), this keeps ALL links + category so
+    # the company detail page can show them grouped by category.
+    all_sources = []
+    _seen_source_urls = set()
+    for s in sources:
+        u = (s.get("url") or "").strip()
+        if not u or u in _seen_source_urls:
+            continue
+        _seen_source_urls.add(u)
+        all_sources.append({"url": u, "category": s.get("source_type") or "Other"})
+    # NOTE: education pass links are intentionally NOT added here - they are shown
+    # per-field inside the "Education Fitment Research" card (via education_evidence
+    # checked_sources), not in this general Data Sources list.
+
     # Save to MongoDB. Agar LLM extraction API hi fail hui thi (sources mile the,
     # par unhe parse nahi kar paye), to "researched" ke saath last_error bhi save
     # karte hain - taaki sparse/"Not Found" fields ka asli reason pata chale.
@@ -208,6 +240,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
         "status": "researched",
         "education_fitment_evidence": education_evidence,
         "education_fitment_error": education_error,
+        "all_sources": all_sources,
     }
     if llm_error:
         update_fields["last_error"] = llm_error

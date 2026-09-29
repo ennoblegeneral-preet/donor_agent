@@ -1,14 +1,13 @@
 {% extends "base_app.html" %}
-{% set active_nav = 'dashboard' %}
-{% block title %}Dashboard - DonorIQ{% endblock %}
+{% block title %}{{ page_label }} - DonorIQ{% endblock %}
 {% block page_kicker %}
 <p class="font-label-md text-label-md text-primary uppercase tracking-wider mb-1 flex items-center gap-2">
     <span class="w-1.5 h-1.5 rounded-full bg-primary pulse-active"></span>
-    Research intelligence workspace
+    {{ page_label }} workspace
 </p>
 {% endblock %}
-{% block page_title %}Research Dashboard{% endblock %}
-{% block page_subtitle %}Overview of your current intelligence pipeline.{% endblock %}
+{% block page_title %}{{ page_label }}{% endblock %}
+{% block page_subtitle %}{% if show_financials %}Full company &amp; CSR overview.{% else %}Ennoble fitment overview for {{ page_label|lower }}.{% endif %}{% endblock %}
 
 {% block content %}
 <style>
@@ -116,18 +115,12 @@
 <!-- Start Research -->
 <div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
     <form action="/research" method="post" class="flex flex-col md:flex-row gap-4 items-stretch md:items-center" id="addCompanyForm">
+        <input type="hidden" name="company_type" value="{{ company_type }}">
         <div class="relative w-full flex-grow ambient-glow rounded-lg">
             <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-[24px]">search</span>
-            <input name="company_name" required class="w-full bg-[#0F1117] border border-[#2E3245] rounded-lg pl-14 pr-4 py-4 font-body-lg text-body-lg text-on-surface focus:outline-none focus:border-primary transition-colors" placeholder="Research a new company..." type="text">
+            <input name="company_name" required class="w-full bg-[#0F1117] border border-[#2E3245] rounded-lg pl-14 pr-4 py-4 font-body-lg text-body-lg text-on-surface focus:outline-none focus:border-primary transition-colors" placeholder="Research a new {{ page_label|lower }} record..." type="text">
         </div>
         <input name="website" class="w-full md:w-64 bg-[#0F1117] border border-[#2E3245] rounded-lg px-4 py-4 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary transition-colors" placeholder="Website URL (optional)" type="url">
-        <select name="company_type" class="w-full md:w-52 bg-[#0F1117] border border-[#2E3245] rounded-lg px-4 py-4 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary transition-colors">
-            <option value="CSR/Corporates" selected>CSR / Corporates</option>
-            <option value="Institutional Donors">Institutional Donors</option>
-            <option value="FCRA">FCRA</option>
-            <option value="HNIs">HNIs</option>
-            <option value="Family Foundations">Family Foundations</option>
-        </select>
         <button type="submit" class="w-full md:w-auto btn-primary px-8 py-4 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center justify-center gap-2">
             <span>Start Research</span>
             <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
@@ -139,6 +132,7 @@
     </button>
     <div id="bulkImportPanel" class="hidden mt-3 pt-3 border-t border-outline-variant/20">
         <form id="bulkUploadForm" class="flex flex-col md:flex-row gap-3 items-stretch md:items-center" enctype="multipart/form-data">
+            <input type="hidden" name="company_type" value="{{ company_type }}">
             <input type="file" name="csv_file" accept=".csv, .xlsx, .xls" required class="flex-grow font-body-sm text-body-sm text-on-surface-variant">
             <button type="submit" class="btn-secondary px-5 py-2.5 rounded-lg font-label-md text-label-md whitespace-nowrap">Upload &amp; Run Pipeline</button>
         </form>
@@ -158,7 +152,7 @@
 {% if not companies %}
 <div id="emptyState" class="glass-panel rounded-xl p-stack-lg text-center" style="padding: 4rem 2rem;">
     <div class="text-[48px] mb-4 animate-bounce-in">📂</div>
-    <p class="font-body-md text-body-md text-on-surface-variant">No companies in the database yet. Add one above to kick off the multi-agent pipeline.</p>
+    <p class="font-body-md text-body-md text-on-surface-variant">No {{ page_label|lower }} added yet. Add one above to kick off the multi-agent pipeline.</p>
 </div>
 {% else %}
 
@@ -328,12 +322,13 @@
             </div>
             {% endif %}
         </div>
+        {% set csr_d = c.get('csr_data') or {} %}
+        {% set card_csr_unspent = csr_d.get('csr_unspent_amount') %}
+        {% if show_financials %}
         {% set fin = c.get('financial_data') or {} %}
         {% set fy_list = fin.get('fiscal_years') or [] %}
         {% set latest_turnover = (fin.get('turnover') or {}).get(fy_list[0]) if fy_list else None %}
-        {% set csr_d = c.get('csr_data') or {} %}
         {% set card_csr_spend = csr_d.get('csr_spend') %}
-        {% set card_csr_unspent = csr_d.get('csr_unspent_amount') %}
         {% set card_csr_year = csr_d.get('csr_spend_year') %}
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-stack-md py-3 border-t border-[#2E3245]/50">
             <div>
@@ -365,6 +360,29 @@
                 <p class="font-body-md text-body-md {% if c.get('record_stage') == 'Prospect' %}text-tertiary font-medium{% else %}text-on-surface-variant italic{% endif %}" style="font-size:12px;">{{ c.get('record_stage', 'New') }}</p>
             </div>
         </div>
+        {% else %}
+        {% set pfit = c.get('program_fitment') or {} %}
+        {% set overall_fit = pfit.get('Ennoble Fitment', 'Not Evident') %}
+        {% set fit_color = 'text-emerald-400' if 'high' in overall_fit.lower() else ('text-amber-400' if ('medium' in overall_fit.lower() or 'mod' in overall_fit.lower()) else 'text-on-surface-variant') %}
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-stack-md py-3 border-t border-[#2E3245]/50">
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Sector</p>
+                <p class="font-body-md text-body-md text-on-surface truncate" style="font-size:12px;">{{ (c.get('research_json') or {}).get('industry', '-') }}</p>
+            </div>
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Ennoble Fitment</p>
+                <p class="font-body-md text-body-md {{ fit_color }} truncate font-semibold" style="font-size:12px;">{{ overall_fit }}</p>
+            </div>
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Tier / Category</p>
+                <p class="font-body-md text-body-md text-on-surface truncate font-semibold" style="font-size:12px;">{{ c.get('category') or c.get('tier') or '-' }}</p>
+            </div>
+            <div>
+                <p class="font-label-md text-label-md text-on-surface-variant uppercase mb-1" style="font-size:10px;">Lead Status</p>
+                <p class="font-body-md text-body-md {% if c.get('record_stage') == 'Prospect' %}text-tertiary font-medium{% else %}text-on-surface-variant italic{% endif %}" style="font-size:12px;">{{ c.get('record_stage', 'New') }}</p>
+            </div>
+        </div>
+        {% endif %}
         {% set card_partners = (c.get('csr_data', {}) or {}).get('implementation_partners') or (c.get('research_json', {}) or {}).get('existing_implementation_partners') or [] %}
         {% set card_comm = (c.get('csr_data', {}) or {}).get('committee_members') or c.get('committee_members') or [] %}
         {% set card_comm_li = c.get('_committee_members_linkedin_lookup') or {} %}

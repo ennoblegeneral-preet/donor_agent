@@ -116,7 +116,11 @@ def _create_user_col_index(col):
         pass
 
 
-def create_company(company_name: str, website: str = None, created_by: str = None) -> str:
+COMPANY_CATEGORIES = ["CSR/Corporates", "Institutional Donors", "FCRA", "HNIs", "Family Foundations"]
+DEFAULT_COMPANY_CATEGORY = "CSR/Corporates"
+
+
+def create_company(company_name: str, website: str = None, created_by: str = None, company_type: str = DEFAULT_COMPANY_CATEGORY) -> str:
     """
     Insert company into the user's own collection: companies_<username>.
     If already exists in that user's collection, return its existing ID.
@@ -131,6 +135,7 @@ def create_company(company_name: str, website: str = None, created_by: str = Non
     doc = {
         "company_name": company_name,
         "website": website,
+        "company_type": company_type if company_type in COMPANY_CATEGORIES else DEFAULT_COMPANY_CATEGORY,
         "status": "new",
         "research_json": None,
         "contacts_json": [],

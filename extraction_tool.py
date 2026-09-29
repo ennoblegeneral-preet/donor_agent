@@ -332,11 +332,20 @@ it (e.g. sanitation/drinking water/hygiene DOES count as School Infrastructure
 evidence, not just literal classroom construction) - judge "value" against
 that DEFINITION as well as the filed name , not against the field name alone.
 
+The evidence MUST be about {company_name} itself - its own CSR programme, its
+foundation, or a report/article that names {company_name} as the funder or
+implementer. A page that only describes an activity in general, or describes a
+DIFFERENT organisation, or a vendor/supplier that merely sells or runs such
+programs (e.g. an 'Atal Tinkering Lab' or 'STEM lab' provider's own marketing
+page), is NOT evidence for {company_name} - set that field to Not Found even if
+the page is full of matching keywords.
+
 For each field return:
-- value: Yes only when the source explicitly supports that exact activity, AS
-  DESCRIBED IN ITS DEFINITION; No only when a reliable source explicitly says
-  it is absent; otherwise Not Found.
-- evidence: a short factual quote/paraphrase grounded in the source which show the company has invested in that field.
+- value: Yes only when the source explicitly ties {company_name} to that exact
+  activity, AS DESCRIBED IN ITS DEFINITION; No only when a reliable source
+  explicitly says it is absent; otherwise Not Found.
+- evidence: a short factual quote/paraphrase grounded in the source which shows
+  {company_name} has invested in that field, and which names {company_name}.
 - source_indexes: indexes of the supporting sources, such as [1, 2].
 
 Your own "evidence" text must never contradict your own "value" - if the
@@ -388,12 +397,15 @@ Return ONLY valid JSON:
                 }
                 for i in valid_indexes
             ],
+            # All scraped links for this field (display-only in the education card).
+            # The LLM above only reasons over the top 5, but we surface every link
+            # here so the card can list Source 1, 2, 3 ... in a scroll box.
             "checked_sources": [
                 {
                     "url": source.get("url"),
                     "title": source.get("title") or "",
                 }
-                for source in sources[:5]
+                for source in sources
                 if source.get("url")
             ],
             "status": status,
