@@ -20,32 +20,7 @@
                 <span class="font-label-md text-label-md">Home</span>
             </a>
         </li>
-        {% if workspace == 'home' %}
-        <li>
-            <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1" href="/lead-generation">
-                <span class="material-symbols-outlined">auto_awesome</span>
-                <span class="font-label-md text-label-md">Lead Generation</span>
-            </a>
-        </li>
-        {% endif %}
-        {% if workspace == 'generation' %}
-        <li class="px-4 pt-2 pb-1">
-            <span class="font-label-md text-label-md text-on-surface-variant/60 uppercase tracking-wider" style="font-size:10px;">Generate leads</span>
-        </li>
-        {% for gnav, gslug, glabel, gicon in [
-            ('gen_csr', 'csr-corporates', 'CSR / Corporates', 'corporate_fare'),
-            ('gen_institutional', 'institutional-donors', 'Institutional Donors', 'account_balance'),
-            ('gen_fcra', 'fcra', 'FCRA', 'public'),
-            ('gen_hnis', 'hnis', 'HNIs', 'person'),
-            ('gen_family', 'family-foundations', 'Family Foundations', 'diversity_3') ] %}
-        <li>
-            <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 {% if active_nav == gnav %}bg-primary-container/20 text-primary border-r-4 border-primary{% else %}text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1{% endif %}" href="/lead-generation/{{ gslug }}">
-                <span class="material-symbols-outlined" {% if active_nav == gnav %}style="font-variation-settings: 'FILL' 1;"{% endif %}>{{ gicon }}</span>
-                <span class="font-label-md text-label-md">{{ glabel }}</span>
-            </a>
-        </li>
-        {% endfor %}
-        {% endif %}
+        {# Lead Generation nav removed for this deployment. #}
         {% if workspace in ['home', 'research'] %}
         <li>
             <a class="nav-item flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 {% if active_nav == 'dashboard' %}bg-primary-container/20 text-primary border-r-4 border-primary{% else %}text-on-surface-variant hover:bg-surface-variant/30 hover:translate-x-1{% endif %}" href="/">

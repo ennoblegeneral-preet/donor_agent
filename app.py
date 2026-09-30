@@ -564,90 +564,12 @@ def _run_generation(slug):
         _set("error", f"Extraction failed: {e}", 100)
 
 
-@app.route("/lead-generation", methods=["GET"])
-@login_required
-def lead_generation():
-    # Landing → first category tab.
-    return redirect(url_for("lead_generation_category", slug="csr-corporates"))
-
-
-@app.route("/lead-generation/<slug>", methods=["GET"])
-@login_required
-def lead_generation_category(slug):
-    cfg = LEAD_GEN_CATEGORIES.get(slug)
-    if not cfg:
-        abort(404)
-    job = _lead_gen_job(slug)
-    stats = job.get("stats") or _read_universe_stats(cfg["file"])
-    return render_template(
-        "lead_generation.html",
-        slug=slug,
-        label=cfg["label"],
-        status=cfg["status"],
-        stats=stats,
-        job_state=job.get("state", "idle"),
-        role=session.get("role"),
-        username=session.get("username"),
-        active_nav=cfg["nav"],
-        impersonating=session.get("impersonated_by"),
-    )
-
-
-@app.route("/lead-generation/<slug>/run", methods=["POST"])
-@login_required
-def lead_generation_run(slug):
-    cfg = LEAD_GEN_CATEGORIES.get(slug)
-    if not cfg:
-        abort(404)
-    if cfg["status"] != "ready":
-        return jsonify({"status": "error",
-                        "message": "No data source configured for this category yet."}), 400
-    with lead_gen_lock:
-        if lead_gen_jobs.get(slug, {}).get("state") == "running":
-            return jsonify({"status": "already_running",
-                            "message": "Extraction already in progress."}), 409
-        lead_gen_jobs[slug] = {"state": "running", "message": "Starting…",
-                               "percent": 0, "stats": None}
-    threading.Thread(target=_run_generation, args=(slug,), daemon=True).start()
-    return jsonify({"status": "started"}), 202
-
-
-@app.route("/lead-generation/<slug>/progress", methods=["GET"])
-@login_required
-@limiter.exempt
-def lead_generation_progress(slug):
-    if slug not in LEAD_GEN_CATEGORIES:
-        abort(404)
-    return jsonify(_lead_gen_job(slug))
-
-
-@app.route("/lead-generation/<slug>/download", methods=["GET"])
-@login_required
-def lead_generation_download(slug):
-    cfg = LEAD_GEN_CATEGORIES.get(slug)
-    if not cfg or not cfg["file"] or not os.path.exists(cfg["file"]):
-        abort(404)
-    return send_file(cfg["file"], as_attachment=True, download_name=cfg["download"])
-
-
-@app.route("/lead-generation/<slug>/delete", methods=["POST"])
-@login_required
-def lead_generation_delete(slug):
-    cfg = LEAD_GEN_CATEGORIES.get(slug)
-    if not cfg:
-        abort(404)
-    with lead_gen_lock:
-        if lead_gen_jobs.get(slug, {}).get("state") == "running":
-            return jsonify({"status": "error",
-                            "message": "Extraction is running — wait for it to finish."}), 409
-    try:
-        if cfg["file"] and os.path.exists(cfg["file"]):
-            os.remove(cfg["file"])
-        with lead_gen_lock:
-            lead_gen_jobs[slug] = {"state": "idle", "message": "", "percent": 0, "stats": None}
-        return jsonify({"status": "deleted"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+# ---------------------------------------------------------------------------
+# Lead Generation routes are disabled for this deployment. The handlers,
+# helpers (LEAD_GEN_CATEGORIES, _run_generation, etc.) and extract_*.py
+# scrapers remain in the repo but are not exposed as routes, so the feature
+# is unreachable. Re-enable by restoring the route definitions here.
+# ---------------------------------------------------------------------------
 
 
 @app.route("/company/<company_id>", methods=["GET"])
