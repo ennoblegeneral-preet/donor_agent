@@ -75,13 +75,20 @@
 {% set approved_count = companies | selectattr('approval_status', 'equalto', 'approved') | list | length %}
 {% set tier_a_count = companies | selectattr('tier', 'equalto', 'Tier A') | list | length %}
 {% set zoho_count = companies | selectattr('upload_status', 'equalto', 'uploaded') | list | length %}
-<div class="grid grid-cols-2 md:grid-cols-5 gap-gutter mb-stack-lg">
+<div class="grid grid-cols-2 md:grid-cols-6 gap-gutter mb-stack-lg">
     <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:0ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-primary/70 text-[20px]">corporate_fare</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Total Companies</h3>
         </div>
         <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ count }}">0</div>
+    </div>
+    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:30ms;">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-primary/70 text-[20px]">today</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Searches Today</h3>
+        </div>
+        <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ searches_today }}">0</div>
     </div>
     <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:60ms;">
         <div class="flex items-center gap-2 mb-2">

@@ -331,10 +331,18 @@ def dashboard():
     search_cfg = get_effective_search_config(username)
     search_configured = bool(search_cfg.get("configured") and search_cfg.get("api_key"))
 
+    # Searches done today = companies created today (created_at is stored in UTC).
+    today_utc = datetime.utcnow().date()
+    searches_today = sum(
+        1 for c in companies
+        if isinstance(c.get("created_at"), datetime) and c["created_at"].date() == today_utc
+    )
+
     return render_template(
         "index.html",
         companies=companies,
         count=len(companies),
+        searches_today=searches_today,
         db_error=db_error,
         search_configured=search_configured,
         search_provider=search_cfg.get("provider", "serper"),
