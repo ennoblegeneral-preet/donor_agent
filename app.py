@@ -8,7 +8,7 @@ import os
 import threading
 import uuid
 from urllib.parse import urlparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
@@ -346,11 +346,14 @@ def dashboard():
     search_cfg = get_effective_search_config(username)
     search_configured = bool(search_cfg.get("configured") and search_cfg.get("api_key"))
 
-    # Searches done today = companies created today (created_at is stored in UTC).
-    today_utc = datetime.utcnow().date()
+    # Searches done today = companies created today, measured in IST (UTC+5:30) so
+    # the count resets at midnight IST. created_at is stored as naive UTC.
+    _IST_OFFSET = timedelta(hours=5, minutes=30)
+    today_ist = (datetime.utcnow() + _IST_OFFSET).date()
     searches_today = sum(
         1 for c in companies
-        if isinstance(c.get("created_at"), datetime) and c["created_at"].date() == today_utc
+        if isinstance(c.get("created_at"), datetime)
+        and (c["created_at"] + _IST_OFFSET).date() == today_ist
     )
 
     return render_template(
