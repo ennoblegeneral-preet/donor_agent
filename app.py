@@ -26,6 +26,7 @@ from compliance_agent import check_compliance
 from scoring_agent import score_company
 # from contact_discovery_agent import find_decision_makers_apollo  # Apollo disabled
 from audit_logger import log_action
+from cancellation import request_cancel, clear as clear_cancel, check as check_cancel, PipelineCancelled
 from pdf_service import generate_research_pdf, generate_research_filename
 # from email_service import send_research_pdf
 from email_service import send_research_excel, send_combined_research_excel
@@ -155,6 +156,7 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
     user_search_keys = get_user_search_keys(username) if username else {}
     set_search_context(user_search_keys)
     try:
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "research", "Researching public company and CSR information.", percent=20)
         research = research_company(company_id, company_name, website)
         if not research:
@@ -164,18 +166,21 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
             set_pipeline_progress(company_id, "research", message, "error", 100)
             return
 
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "financials", "Pulling turnover/PBT from Screener and calculating CSR budget.", percent=35)
         try:
             research_company_with_financials(company_id, company_name, website)
         except Exception as fin_error:
             print(f"[Pipeline Warning] Financial research failed for {company_name}: {fin_error}")
 
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "compliance", "Checking eligibility and compliance signals.", percent=50)
         compliance = check_compliance(company_id, research)
         if compliance.get("blocked"):
             set_pipeline_progress(company_id, "complete", "Pipeline finished: this company was blocked by compliance checks.", "complete", 100)
             return
 
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "scoring", "Running fit-check and partnership assessment.", percent=75)
         score_result = score_company(company_id)
 
@@ -202,6 +207,15 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
             complete_message = "Pipeline complete. The lead is ready for review."
 
         set_pipeline_progress(company_id, "complete", complete_message, "complete", 100)
+    except PipelineCancelled:
+        stop_msg = "Search stopped by you before completion. No further steps were run."
+        print(f"[Pipeline Cancelled] {company_name}: stopped by user.")
+        update_company(company_id, {
+            "status": "failed_research",
+            "last_error": {"type": "cancelled", "message": stop_msg},
+        })
+        set_pipeline_progress(company_id, "cancelled", stop_msg, "cancelled", 100)
+        log_action(company_id, "research_cancelled", "User", details=stop_msg)
     finally:
         usage = get_tracked_usage()
         if usage and usage.get("calls"):
@@ -223,6 +237,7 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
 
 def run_company_pipeline(company_id, company_name, website, username=None):
     """Run the existing pipeline in the background and enforce strict execution timeout."""
+    clear_cancel(company_id)  # fresh run: drop any stale stop flag from a previous attempt
     start_tracking()
     start_search_tracking()
     user_search_keys = get_user_search_keys(username) if username else {}
@@ -639,6 +654,27 @@ def add_company():
     return jsonify({"status": "started", "company_id": company_id}), 202
 
 
+@app.route("/research/stop/<company_id>", methods=["POST"])
+@login_required
+@limiter.exempt
+def research_stop(company_id):
+    """Manually stop an in-progress research pipeline (cooperative cancel).
+
+    Flags the pipeline to abort at its next checkpoint so no further LLM/search
+    tokens are spent - useful when a search was started with the wrong name.
+    """
+    username = session.get("username")
+    company = get_company(company_id, username=username)
+    if not company:
+        return jsonify({"status": "error", "message": "Company not found."}), 404
+    request_cancel(company_id)
+    print(f"[Pipeline Stop Requested] '{company.get('company_name', company_id)}' by {username}")
+    return jsonify({
+        "status": "stopping",
+        "message": "Stopping… the current step will finish, then the pipeline halts.",
+    }), 202
+
+
 MAX_BULK_ROWS = 200
 MAX_EMAIL_BULK = 50
 
@@ -808,6 +844,37 @@ def add_companies_bulk():
 
     return jsonify({"status": "started", "started": started, "skipped": skipped}), 202
 
+
+
+@app.route("/active-pipelines", methods=["GET"])
+@login_required
+@limiter.exempt
+def active_pipelines():
+    """Return the caller's still-running pipelines so the dashboard can re-attach
+    its progress UI after a page refresh (progress lives in server memory, but the
+    browser forgets which searches were in flight)."""
+    username = session.get("username")
+    role = session.get("role")
+    with pipeline_jobs_lock:
+        items = list(pipeline_jobs.items())
+    active = []
+    for cid, prog in items:
+        if prog.get("state") not in ("queued", "running"):
+            continue
+        company = get_company(cid, username=username)
+        if not company:
+            continue
+        if role != "admin" and company.get("created_by") != username:
+            continue
+        active.append({
+            "company_id": cid,
+            "company_name": company.get("company_name", "Company"),
+            "stage": prog.get("stage"),
+            "message": prog.get("message"),
+            "state": prog.get("state"),
+            "percent": prog.get("percent", 0),
+        })
+    return jsonify({"active": active})
 
 
 @app.route("/research-progress/<company_id>", methods=["GET"])

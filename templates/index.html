@@ -83,12 +83,14 @@
         </div>
         <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ count }}">0</div>
     </div>
-    <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:30ms;">
+    <div id="searchesTodayCard" role="button" tabindex="0" onclick="toggleTodayView()" title="Click to break down today's searches by tier"
+         class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up cursor-pointer" style="animation-delay:30ms;">
         <div class="flex items-center gap-2 mb-2">
             <span class="material-symbols-outlined text-primary/70 text-[20px]">today</span>
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Searches Today</h3>
         </div>
         <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ searches_today }}">0</div>
+        <div class="font-body-sm text-body-sm text-primary/70 mt-1 flex items-center gap-0.5">Break down <span class="material-symbols-outlined text-[14px]">expand_more</span></div>
     </div>
     <div class="glass-card rounded-xl p-stack-md hover:translate-y-[-2px] transition-transform duration-200 animate-fade-in-up" style="animation-delay:60ms;">
         <div class="flex items-center gap-2 mb-2">
@@ -117,6 +119,54 @@
             <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">In Zoho</h3>
         </div>
         <div class="font-display-lg text-display-lg text-on-surface countup" data-target="{{ zoho_count }}">0</div>
+    </div>
+</div>
+
+<!-- Today's searches breakdown (revealed by clicking the "Searches Today" card above) -->
+<div id="todayBreakdown" class="hidden mb-stack-lg">
+    <div class="flex items-center justify-between mb-3">
+        <h3 class="font-title-md text-title-md text-on-surface flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary text-[20px]">today</span>
+            Today's searches
+            <span class="font-body-sm text-body-sm text-on-surface-variant">— tap a tier to filter the list below</span>
+        </h3>
+        <button type="button" onclick="toggleTodayView()" class="font-label-md text-label-md text-on-surface-variant hover:text-primary flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px]">close</span> Clear
+        </button>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-gutter">
+        <button type="button" data-today-tier="all" onclick="filterTodayTier('all')"
+                class="today-tier-card glass-card rounded-xl p-stack-md text-left hover:translate-y-[-2px] transition-transform duration-200 border border-transparent">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="material-symbols-outlined text-primary/70 text-[20px]">search</span>
+                <h4 class="font-label-md text-label-md text-on-surface-variant uppercase">Total Today</h4>
+            </div>
+            <div id="todayTotal" class="font-display-lg text-display-lg text-on-surface">0</div>
+        </button>
+        <button type="button" data-today-tier="Tier A" onclick="filterTodayTier('Tier A')"
+                class="today-tier-card glass-card rounded-xl p-stack-md text-left hover:translate-y-[-2px] transition-transform duration-200 border border-transparent">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="material-symbols-outlined text-tertiary/70 text-[20px]">workspace_premium</span>
+                <h4 class="font-label-md text-label-md text-on-surface-variant uppercase">Tier A Today</h4>
+            </div>
+            <div id="todayTierA" class="font-display-lg text-display-lg text-tertiary">0</div>
+        </button>
+        <button type="button" data-today-tier="Tier B" onclick="filterTodayTier('Tier B')"
+                class="today-tier-card glass-card rounded-xl p-stack-md text-left hover:translate-y-[-2px] transition-transform duration-200 border border-transparent">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="material-symbols-outlined text-primary/70 text-[20px]">star_half</span>
+                <h4 class="font-label-md text-label-md text-on-surface-variant uppercase">Tier B Today</h4>
+            </div>
+            <div id="todayTierB" class="font-display-lg text-display-lg text-primary">0</div>
+        </button>
+        <button type="button" data-today-tier="Tier C" onclick="filterTodayTier('Tier C')"
+                class="today-tier-card glass-card rounded-xl p-stack-md text-left hover:translate-y-[-2px] transition-transform duration-200 border border-transparent">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="material-symbols-outlined text-amber-500/70 text-[20px]">star_outline</span>
+                <h4 class="font-label-md text-label-md text-on-surface-variant uppercase">Tier C Today</h4>
+            </div>
+            <div id="todayTierC" class="font-display-lg text-display-lg text-amber-500">0</div>
+        </button>
     </div>
 </div>
 
@@ -456,7 +506,7 @@
 
 <!-- Live pipeline progress modal -->
 <div id="pipelineModal" class="modal-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="pipelineTitle">
-    <div class="modal-box pipeline-modal">
+    <div class="modal-box pipeline-modal" style="position:relative;">
         <div class="pipeline-modal-header">
             <span class="section-kicker">Live pipeline activity</span>
             <button type="button" class="pipeline-minimize-btn" id="pipelineMinimizeBtn" onclick="togglePipelineMinimize()" aria-label="Minimize processing card" title="Minimize">−</button>
@@ -465,6 +515,12 @@
         <h2 class="modal-title" id="pipelineTitle">Preparing your research</h2>
         <p class="modal-subtitle" id="pipelineMessage">Adding the company to the pipeline.</p>
         <div class="progress-track"><div class="progress-bar" id="pipelineBar"></div></div>
+        <button type="button" id="pipelineStopBtn" onclick="stopPipeline()"
+                class="flex items-center justify-center rounded-full transition-transform hover:scale-110"
+                style="position:absolute; bottom:12px; right:12px; width:34px; height:34px; background:#f87171; color:#fff; z-index:5;"
+                title="Stop this search now — no further tokens will be spent" aria-label="Stop search">
+            <span class="material-symbols-outlined text-[20px]">stop_circle</span>
+        </button>
         <ol class="pipeline-steps" id="pipelineSteps">
             <li data-stage="queued"><span>1</span><div><strong>Queue company</strong><small>Set up the research job</small></div></li>
             <li data-stage="research"><span>2</span><div><strong>Research company</strong><small>Gather public company and CSR information</small></div></li>
@@ -480,6 +536,24 @@
 {% block extra_scripts %}
 <script>
     let pipelinePoller = null;
+    let currentPipelineCompanyId = null;
+
+    async function stopPipeline() {
+        if (!currentPipelineCompanyId) return;
+        const btn = document.getElementById('pipelineStopBtn');
+        if (btn) { btn.disabled = true; btn.title = 'Stopping…'; btn.style.opacity = '0.6'; }
+        try {
+            const res = await fetch(`/research/stop/${currentPipelineCompanyId}`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || 'Could not stop the search.');
+            const msgEl = document.getElementById('pipelineMessage');
+            if (msgEl) msgEl.textContent = data.message || 'Stopping…';
+            showNotification('Stopping the search — no further tokens will be spent.', 'success');
+        } catch (error) {
+            if (btn) { btn.disabled = false; btn.title = 'Stop this search now — no further tokens will be spent'; btn.style.opacity = '1'; }
+            showNotification(error.message, 'error');
+        }
+    }
 
     function togglePipelineMinimize() {
         const modal = document.getElementById('pipelineModal');
@@ -498,14 +572,30 @@
         document.querySelectorAll('#pipelineSteps li').forEach((item, index) => {
             item.classList.toggle('is-active', item.dataset.stage === progress.stage && progress.state === 'running');
             item.classList.toggle('is-complete', currentIndex > index || progress.state === 'complete');
-            item.classList.toggle('is-error', progress.state === 'error' && item.dataset.stage === progress.stage);
+            item.classList.toggle('is-error', (progress.state === 'error' || progress.state === 'cancelled') && item.dataset.stage === progress.stage);
         });
+        // Hide the Stop button once the pipeline is no longer running.
+        const terminal = ['complete', 'error', 'cancelled'].includes(progress.state);
+        const stopBtn = document.getElementById('pipelineStopBtn');
+        if (stopBtn) stopBtn.style.display = terminal ? 'none' : 'flex';
+        if (progress.state === 'cancelled') {
+            document.getElementById('pipelineTitle').textContent = 'Search stopped';
+        }
     }
 
     function startPipelineProgress(companyId) {
+        currentPipelineCompanyId = companyId;
         const modal = document.getElementById('pipelineModal');
         modal.classList.remove('pipeline-minimized');
         document.getElementById('pipelineMinimizeBtn').textContent = '−';
+        // Reset the Stop button for a fresh run.
+        const stopBtn = document.getElementById('pipelineStopBtn');
+        if (stopBtn) {
+            stopBtn.disabled = false;
+            stopBtn.style.display = 'flex';
+            stopBtn.style.opacity = '1';
+            stopBtn.title = 'Stop this search now — no further tokens will be spent';
+        }
         modal.style.display = 'flex';
         pipelinePoller = setInterval(async () => {
             try {
@@ -513,7 +603,7 @@
                 const progress = await response.json();
                 if (!response.ok) throw new Error(progress.message);
                 updatePipelineUI(progress);
-                if (progress.state === 'complete' || progress.state === 'error') {
+                if (progress.state === 'complete' || progress.state === 'error' || progress.state === 'cancelled') {
                     clearInterval(pipelinePoller);
                     setTimeout(() => window.location.reload(), 1400);
                 }
@@ -684,22 +774,59 @@
         animateCountUp(el, target);
     });
 
-    // Rebuild the bulk cards after a browser refresh while the batch is running
-    // (or after it has completed). Main company cards are loaded from the database.
-    window.addEventListener('DOMContentLoaded', () => {
+    // After a browser refresh, re-attach the progress UI to any pipelines that are
+    // still running. Progress lives in server memory, so we ask the server which of
+    // the caller's searches are in flight (single -> modal, several -> bulk panel).
+    // Falls back to the localStorage bulk batch if the server has nothing (e.g. the
+    // app process restarted, so the DB status is the only remaining truth).
+    function onReady(fn) {
+        if (document.readyState !== 'loading') fn();
+        else document.addEventListener('DOMContentLoaded', fn);
+    }
+
+    function restoreBulkFromLocalStorage() {
         const batch = JSON.parse(localStorage.getItem('bulkResearchBatch') || 'null');
-        if (!batch?.companies?.length) return;
+        if (!batch?.companies?.length) return false;
         window.bulkStartedCompanies = batch.companies;
-        const panel = document.getElementById('bulkImportPanel');
-        panel?.classList.remove('hidden');
+        document.getElementById('bulkImportPanel')?.classList.remove('hidden');
         const statusEl = document.getElementById('bulkStatus');
-        statusEl.textContent = 'Restored bulk research progress.';
+        if (statusEl) statusEl.textContent = 'Restored bulk research progress.';
         trackBulkProgress(batch.companies.map(c => c.company_id), statusEl);
-    });
+        return true;
+    }
+
+    async function restoreRunningPipelines() {
+        let active = [];
+        try {
+            const res = await fetch('/active-pipelines');
+            if (res.ok) active = (await res.json()).active || [];
+        } catch (e) { /* offline / transient — fall back below */ }
+
+        if (active.length === 1) {
+            const p = active[0];
+            startPipelineProgress(p.company_id);
+            updatePipelineUI(p);
+        } else if (active.length > 1) {
+            window.bulkStartedCompanies = active.map(p => ({ company_id: p.company_id, company_name: p.company_name }));
+            document.getElementById('bulkImportPanel')?.classList.remove('hidden');
+            const statusEl = document.getElementById('bulkStatus');
+            if (statusEl) statusEl.textContent = 'Restored running research progress.';
+            trackBulkProgress(active.map(p => p.company_id), statusEl);
+        } else {
+            // Server reports nothing running — restore a leftover bulk batch if present.
+            restoreBulkFromLocalStorage();
+        }
+    }
+
+    onReady(restoreRunningPipelines);
 
     // Main view: "All Companies" (unfiltered list + status tabs) vs "Search" (query-driven results)
     let mainView = 'all';
     let activeFilter = 'all';
+    // "Searches Today" drill-down: when on, the list is limited to companies created today,
+    // optionally further narrowed to a tier ('all' | 'Tier A' | 'Tier B' | 'Tier C').
+    let todayOnly = false;
+    let todayTier = 'all';
 
     function switchMainView(view) {
         mainView = view;
@@ -743,7 +870,9 @@
                 || (activeFilter === 'tier-a' && card.dataset.tier === 'Tier A')
                 || (activeFilter === 'tier-b' && card.dataset.tier === 'Tier B')
                 || (activeFilter === 'prospect' && card.dataset.stage === 'Prospect');
-            const visible = matchesOwner && matchesFilter;
+            const matchesToday = !todayOnly
+                || (isToday(card) && (todayTier === 'all' || card.dataset.tier === todayTier));
+            const visible = matchesOwner && matchesFilter && matchesToday;
             card.style.display = visible ? '' : 'none';
             if (visible) visibleCount++;
         });
@@ -763,6 +892,69 @@
             applyFilters();
         });
     });
+
+    // ── "Searches Today" drill-down ─────────────────────────────────
+    // A company counts as "today" if its created_at (UTC) is the current UTC
+    // date — matching the "Searches Today" card computed on the server.
+    function isToday(card) {
+        const iso = card.dataset.created;
+        if (!iso || iso.length < 10) return false;
+        // created_at is serialized as a UTC isoformat (no tz suffix); compare its
+        // date portion to the current UTC date so it matches the server's card.
+        const now = new Date();
+        const todayUTC = now.getUTCFullYear() + '-'
+            + String(now.getUTCMonth() + 1).padStart(2, '0') + '-'
+            + String(now.getUTCDate()).padStart(2, '0');
+        return iso.slice(0, 10) === todayUTC;
+    }
+
+    function computeTodayCounts() {
+        let total = 0, a = 0, b = 0, c = 0;
+        document.querySelectorAll('.company-card').forEach(card => {
+            if (!isToday(card)) return;
+            total++;
+            const t = card.dataset.tier;
+            if (t === 'Tier A') a++;
+            else if (t === 'Tier B') b++;
+            else if (t === 'Tier C') c++;
+        });
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('todayTotal', total); set('todayTierA', a); set('todayTierB', b); set('todayTierC', c);
+    }
+
+    function highlightTodayTier() {
+        document.querySelectorAll('.today-tier-card').forEach(el => {
+            const on = el.dataset.todayTier === todayTier;
+            el.classList.toggle('border-primary', on);
+            el.classList.toggle('border-transparent', !on);
+        });
+    }
+
+    function toggleTodayView() {
+        todayOnly = !todayOnly;
+        todayTier = 'all';
+        const panel = document.getElementById('todayBreakdown');
+        const card = document.getElementById('searchesTodayCard');
+        panel?.classList.toggle('hidden', !todayOnly);
+        card?.classList.toggle('ring-2', todayOnly);
+        card?.classList.toggle('ring-primary', todayOnly);
+        if (todayOnly) {
+            computeTodayCounts();
+            highlightTodayTier();
+            if (mainView !== 'all') switchMainView('all');  // switchMainView() calls applyFilters()
+            else applyFilters();
+            panel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else {
+            applyFilters();
+        }
+    }
+
+    function filterTodayTier(tier) {
+        if (!todayOnly) todayOnly = true;
+        todayTier = tier;
+        highlightTodayTier();
+        applyFilters();
+    }
 
     // Sort
     document.getElementById('sortSelect')?.addEventListener('change', function () {

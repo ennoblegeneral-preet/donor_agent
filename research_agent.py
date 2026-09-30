@@ -28,6 +28,7 @@ from financial_extractor import (
 )
 from pdf_utils import extract_csr_section_text, _headers_for
 from error_utils import no_data_error
+from cancellation import check as check_cancel
 from redis_cache import get_json, set_json, make_key
 
 
@@ -91,6 +92,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
     except Exception:
         pass
 
+    check_cancel(company_id)  # stop before spending any search credits
     # Multi-stage search: Run contact search and CSR info search concurrently to save execution time
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_contact = executor.submit(search_contact_sources, company_name, website)
@@ -139,6 +141,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
 
     print(f"[ResearchAgent] Gathered {len(sources)} sources for {company_name}")
 
+    check_cancel(company_id)  # stop before the main extraction LLM call
     research, llm_error = extract_research_with_contact(company_name, sources)
 
     # Dedicated education pass. Keep its audit evidence outside research_json,
@@ -146,6 +149,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
     education_evidence = {}
     education_error = None
     education_search = {}
+    check_cancel(company_id)  # stop before the education search + extraction pass
     try:
         education_search = search_education_fields(company_name, website)
         education_evidence, education_error = extract_education_fields(
@@ -201,6 +205,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
     # priority-geography scoring override (scoring_agent.py) with nothing to match.
     missing_geo_values = {"", "not found", "not publicly available", "none", "n/a", "na"}
     if (research.program_district_state or "").strip().lower() in missing_geo_values:
+        check_cancel(company_id)  # stop before the geography fallback search + extraction
         try:
             geo_search = search_company_geography(company_name, website)
             geo_fields, geo_error = extract_geography_fields(company_name, geo_search.get("sources", []))
