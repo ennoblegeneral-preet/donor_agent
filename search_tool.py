@@ -895,7 +895,7 @@ def search_education_spend_data(company_name: str, website: str = None) -> dict:
 
 EDUCATION_FIELD_QUERIES = {
     "csr_stem_education": [
-        '{company} CSR (STEM OR "science lab" OR "computer lab" OR "digital learning" OR robotics OR coding OR "Atal Tinkering Lab" OR AI )',
+        '{company} CSR (STEM OR "science lab" OR "computer lab" OR "digital learning" OR "robotics" OR "coding" OR "Atal Tinkering Lab" OR "AI")',
     ],
     "csr_school_infra_transformation": [
         '{company} CSR ("school infrastructure" OR "school playground equipments" OR "classroom renovation" OR sanitation OR "drinking water" OR "smart classroom" OR "school building" OR "library")',
@@ -958,43 +958,62 @@ def _mentions_company(company_name: str, *texts) -> bool:
 def search_education_fields(company_name: str, website: str = None) -> dict:
     domain = urlparse(website).netloc.replace("www.", "") if website else ""
 
+    def _run_query(query, attempt, sources, seen_urls, errors):
+        """Execute one education query and append India + company-relevant hits
+        to `sources`. Returns the number of new sources added."""
+        added = 0
+        try:
+            result = _execute_search(query, max_results=10, include_raw_content=True)
+            for item in result.get("results", []):
+                url = item.get("url", "")
+                text = item.get("raw_content") or item.get("content", "")
+                if not url or url in seen_urls or not _is_india_result(url, text):
+                    continue
+                # Drop pages that never name the company - generic vendor /
+                # keyword-match pages that would otherwise be mistaken for the
+                # company's own CSR evidence.
+                if not _mentions_company(company_name, item.get("title", ""), text):
+                    print(f"[Education Search] Dropped off-topic (no company mention): {url}")
+                    continue
+                seen_urls.add(url)
+                sources.append({
+                    "url": url,
+                    "title": item.get("title", ""),
+                    "text": text[:8000],
+                    "query": query,
+                    "attempt": attempt,
+                })
+                added += 1
+        except Exception as exc:
+            print(f"[Search Warning] Education field {field} failed: {exc}")
+            errors.append(classify_error(exc))
+        return added
+
     def search_one_field(field):
         sources = []
         seen_urls = set()
         errors = []
         templates = EDUCATION_FIELD_QUERIES[field]
+
+        # Primary pass: open-web search (no site: restriction) so BRSR filings,
+        # csrbox.org, annual reports and news are all reachable.
+        attempt = 0
         for attempt, template in enumerate(templates, start=1):
             query = template.format(company=company_name)
-            if domain:
-                query = f"{query} site:{domain}" if attempt == len(templates) else query
             print(f"[Education Search {attempt}/{len(templates)}] {field}: {query}")
-            try:
-                result = _execute_search(query, max_results=10, include_raw_content=True)
-                for item in result.get("results", []):
-                    url = item.get("url", "")
-                    text = item.get("raw_content") or item.get("content", "")
-                    if not url or url in seen_urls or not _is_india_result(url, text):
-                        continue
-                    # Drop pages that never name the company - generic vendor /
-                    # keyword-match pages that would otherwise be mistaken for the
-                    # company's own CSR evidence.
-                    if not _mentions_company(company_name, item.get("title", ""), text):
-                        print(f"[Education Search] Dropped off-topic (no company mention): {url}")
-                        continue
-                    seen_urls.add(url)
-                    sources.append({
-                        "url": url,
-                        "title": item.get("title", ""),
-                        "text": text[:8000],
-                        "query": query,
-                        "attempt": attempt,
-                    })
-            except Exception as exc:
-                print(f"[Search Warning] Education field {field} failed: {exc}")
-                errors.append(classify_error(exc))
+            _run_query(query, attempt, sources, seen_urls, errors)
+
+        # Fallback pass: only if the open web found nothing, retry scoped to the
+        # company's own website to catch anything indexed only there.
+        if not sources and domain:
+            attempt += 1
+            query = f"{templates[0].format(company=company_name)} site:{domain}"
+            print(f"[Education Search {attempt} (site fallback)] {field}: {query}")
+            _run_query(query, attempt, sources, seen_urls, errors)
+
         return field, {
             "sources": sources,
-            "attempts": len(templates),
+            "attempts": attempt,
             "sources_checked": len(sources),
             "errors": errors,
         }
