@@ -12,6 +12,7 @@
 {% block content %}
 <div class="grid grid-cols-1 md:grid-cols-2 gap-gutter max-w-4xl">
 
+    {% if role == 'admin' %}
     <!-- Lead Generation card -->
     <a href="/lead-generation"
        class="group glass-card rounded-2xl p-stack-lg flex flex-col hover:border-primary/60 hover:translate-y-[-3px] transition-all duration-300"
@@ -30,6 +31,7 @@
             <span class="material-symbols-outlined text-[18px] group-hover:translate-x-1 transition-transform">arrow_forward</span>
         </span>
     </a>
+    {% endif %}
 
     <!-- Lead Research card -->
     <a href="/"

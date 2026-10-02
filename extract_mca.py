@@ -92,6 +92,14 @@ def cin_listing_status(cin):
     return "Listed" if (cin or "").strip()[:1].upper() == "L" else "Unlisted"
 
 
+def _to_rupees(value):
+    """Paid-up capital arrives as a number or numeric string; None if unusable."""
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def pipeline_records():
     """Return MCA companies in the company-universe record shape so they merge
     into the CSR/Corporates pipeline (dedupes by name against NSE/BSE)."""
@@ -109,6 +117,7 @@ def pipeline_records():
             isin=None,
             sector=r.get("principal_business_activity_as_per_cin"),
             listing_status=cin_listing_status(r.get("corporate_identification_number")),
+            paidup_capital=_to_rupees(r.get("paidup_capital")),
             source="MCA Maharashtra",
         ))
     return out

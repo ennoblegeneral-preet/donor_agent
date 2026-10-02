@@ -4,6 +4,7 @@ from flask_limiter.util import get_remote_address
 from logger import logger
 import csv
 import io
+import json
 import os
 import threading
 import uuid
@@ -129,7 +130,7 @@ lead_gen_lock = threading.Lock()
 # N companies fires N companies' worth of concurrent Tavily searches at once,
 # which blows through Tavily's rate limit even with the per-call semaphore in
 # search_tool.py (that one only caps instantaneous concurrency, not sustained rate).
-_pipeline_concurrency = threading.Semaphore(8)
+_pipeline_concurrency = threading.Semaphore(6)
 
 
 
@@ -449,26 +450,132 @@ def _lead_gen_job(slug):
                                              "percent": 0, "stats": None}))
 
 
-def _read_universe_stats(filename):
-    """Generic reader for any generated Excel — returns total, headers, a 25-row
-    preview (rows as lists) and generated_at, or None if the file is absent."""
+LISTING_FILTERS = ("all", "listed", "unlisted")
+
+
+def _filter_by_listing(headers, data, listing):
+    """Keep rows whose "Listing Status" matches `listing` (listed/unlisted).
+    Files without that column, or listing="all", are returned unfiltered."""
+    if listing not in ("listed", "unlisted") or "Listing Status" not in headers:
+        return data
+    idx = headers.index("Listing Status")
+    return [r for r in data if str(r[idx] or "").strip().lower() == listing]
+
+
+# Class (A/B/C/D/NA, or Review when verify_pbt_matches.py could not confirm the
+# Screener match) for listed CSR companies, written by categorize_pbt.py.
+# Listed companies not yet fetched by that script get a blank Class.
+PBT_CACHE_FILE = "company_pbt_cache.jsonl"
+PBT_CLASSES = ("A", "B", "C", "D", "NA", "Review")
+PBT_CLASS_FILTERS = ("all",) + PBT_CLASSES
+PBT_COLUMNS = ["Screener Name", "Class"]
+PREVIEW_PAGE_SIZE = 25
+_pbt_cache = {"mtime": None, "by_name": {}, "by_isin": {}}
+
+
+def _load_pbt_classes():
+    """(by_name, by_isin) lookups from the categorize_pbt.py cache, re-read on change."""
+    if not os.path.exists(PBT_CACHE_FILE):
+        return {}, {}
+    mtime = os.path.getmtime(PBT_CACHE_FILE)
+    if _pbt_cache["mtime"] != mtime:
+        by_name, by_isin = {}, {}
+        with open(PBT_CACHE_FILE, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue  # partial line while the script is still writing
+                by_name[rec["company_name"]] = rec
+                if rec.get("isin"):
+                    by_isin[rec["isin"]] = rec
+        _pbt_cache.update(mtime=mtime, by_name=by_name, by_isin=by_isin)
+    return _pbt_cache["by_name"], _pbt_cache["by_isin"]
+
+
+def _attach_pbt_columns(headers, data):
+    """Append PBT_COLUMNS to CSR universe rows (blank for unlisted / not yet fetched)."""
+    by_name, by_isin = _load_pbt_classes()
+    i_name, i_isin = headers.index("Company Name"), headers.index("ISIN")
+    i_status = headers.index("Listing Status")
+    out = []
+    for r in data:
+        rec = None
+        if str(r[i_status] or "").strip().lower() == "listed":
+            rec = by_name.get(r[i_name]) or by_isin.get(r[i_isin])
+        out.append(tuple(r) + ((rec.get("screener_name"), rec.get("category")) if rec
+                               else (None, None)))
+    return headers + PBT_COLUMNS, out
+
+
+def _filter_by_pbt_class(headers, data, cls):
+    """Keep rows whose "Class" matches `cls`; "all" or no column → unfiltered."""
+    if cls not in PBT_CLASSES or "Class" not in headers:
+        return data
+    idx = headers.index("Class")
+    return [r for r in data if r[idx] == cls]
+
+
+def _row_key_fn(headers):
+    """Stable per-row selection key for the CSR universe (ISIN, else company name),
+    or None for files without those columns."""
+    if "ISIN" not in headers or "Company Name" not in headers:
+        return None
+    i_name, i_isin = headers.index("Company Name"), headers.index("ISIN")
+    return lambda r: str(r[i_isin] or "").strip() or str(r[i_name] or "").strip()
+
+
+def _read_universe_rows(filename):
+    """Return (headers, data rows) from a generated Excel, or None if absent/empty."""
     if not filename or not os.path.exists(filename):
         return None
+    import openpyxl
+    wb = openpyxl.load_workbook(filename, read_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not rows:
+        return None
+    headers = [str(h) if h is not None else "" for h in rows[0]]
+    if filename == LEAD_GEN_CATEGORIES["csr-corporates"]["file"] and "Listing Status" in headers:
+        return _attach_pbt_columns(headers, rows[1:])
+    return headers, rows[1:]
+
+
+def _read_universe_stats(filename, listing="all", cls="all", q="", page=1):
+    """Generic reader for any generated Excel — returns total, headers, one
+    25-row preview page (rows as lists, plus selection keys for CSR) and
+    generated_at, or None if the file is absent. `listing` / `cls` filter by the
+    "Listing Status" / "Class" columns when the file has them; `q` searches the
+    first (name) column."""
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(filename, read_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        wb.close()
-        if not rows:
+        parsed = _read_universe_rows(filename)
+        if not parsed:
             return None
-        headers = [str(h) if h is not None else "" for h in rows[0]]
-        data = rows[1:]
-        preview = [[("" if v is None else v) for v in r] for r in data[:25]]
+        headers, data = parsed
+        counts = {f: len(_filter_by_listing(headers, data, f)) for f in LISTING_FILTERS}
+        data = _filter_by_listing(headers, data, listing)
+        class_counts = None
+        if "Class" in headers:
+            idx = headers.index("Class")
+            class_counts = {c: sum(1 for r in data if r[idx] == c) for c in PBT_CLASSES}
+            class_counts["all"] = len(data)
+            data = _filter_by_pbt_class(headers, data, cls)
+        if q:
+            data = [r for r in data if q.lower() in str(r[0] or "").lower()]
+        pages = max(1, -(-len(data) // PREVIEW_PAGE_SIZE))
+        page = min(max(1, page), pages)
+        start = (page - 1) * PREVIEW_PAGE_SIZE
+        page_rows = data[start:start + PREVIEW_PAGE_SIZE]
+        preview = [[("" if v is None else v) for v in r] for r in page_rows]
+        key_fn = _row_key_fn(headers)
+        keys = [key_fn(r) for r in page_rows] if key_fn else None
         generated_at = datetime.fromtimestamp(
             os.path.getmtime(filename), tz=timezone.utc
         ).isoformat()
-        return {"total": len(data), "headers": headers,
+        return {"total": len(data), "headers": headers, "listing": listing,
+                "counts": counts, "class": cls, "class_counts": class_counts,
+                "q": q, "page": page, "pages": pages, "keys": keys,
                 "preview": preview, "generated_at": generated_at}
     except Exception as e:
         print(f"[LeadGen] stats read error: {e}")
@@ -499,6 +606,8 @@ def _run_generation(slug):
             records += emca.pipeline_records()
             _set("running", "Deduplicating…", 85)
             merged = ec.dedupe(records)
+            _set("running", "Removing lowest paid-up unlisted companies…", 90)
+            merged = ec.drop_lowest_unlisted(merged)
             _set("running", "Writing Excel…", 95)
             ec.write_excel(merged, cfg["file"])
         elif slug == "family-foundations":
@@ -565,14 +674,14 @@ def _run_generation(slug):
 
 
 @app.route("/lead-generation", methods=["GET"])
-@login_required
+@admin_required
 def lead_generation():
     # Landing → first category tab.
     return redirect(url_for("lead_generation_category", slug="csr-corporates"))
 
 
 @app.route("/lead-generation/<slug>", methods=["GET"])
-@login_required
+@admin_required
 def lead_generation_category(slug):
     cfg = LEAD_GEN_CATEGORIES.get(slug)
     if not cfg:
@@ -594,7 +703,7 @@ def lead_generation_category(slug):
 
 
 @app.route("/lead-generation/<slug>/run", methods=["POST"])
-@login_required
+@admin_required
 def lead_generation_run(slug):
     cfg = LEAD_GEN_CATEGORIES.get(slug)
     if not cfg:
@@ -613,7 +722,7 @@ def lead_generation_run(slug):
 
 
 @app.route("/lead-generation/<slug>/progress", methods=["GET"])
-@login_required
+@admin_required
 @limiter.exempt
 def lead_generation_progress(slug):
     if slug not in LEAD_GEN_CATEGORIES:
@@ -621,17 +730,74 @@ def lead_generation_progress(slug):
     return jsonify(_lead_gen_job(slug))
 
 
-@app.route("/lead-generation/<slug>/download", methods=["GET"])
-@login_required
+@app.route("/lead-generation/<slug>/stats", methods=["GET"])
+@admin_required
+def lead_generation_stats(slug):
+    cfg = LEAD_GEN_CATEGORIES.get(slug)
+    if not cfg:
+        abort(404)
+    listing = request.args.get("listing", "all").lower()
+    if listing not in LISTING_FILTERS:
+        listing = "all"
+    cls = request.args.get("class", "all")
+    if cls not in PBT_CLASS_FILTERS:
+        cls = "all"
+    q = request.args.get("q", "").strip()
+    page = request.args.get("page", 1, type=int)
+    stats = _read_universe_stats(cfg["file"], listing, cls, q, page)
+    if not stats:
+        return jsonify({"status": "error", "message": "No generated data yet."}), 404
+    return jsonify(stats)
+
+
+@app.route("/lead-generation/<slug>/download", methods=["GET", "POST"])
+@admin_required
 def lead_generation_download(slug):
+    """GET: whole file, or rows matching ?listing= / ?class=.
+    POST {"keys": [...]}: only the selected rows (CSR selection keys)."""
     cfg = LEAD_GEN_CATEGORIES.get(slug)
     if not cfg or not cfg["file"] or not os.path.exists(cfg["file"]):
         abort(404)
-    return send_file(cfg["file"], as_attachment=True, download_name=cfg["download"])
+    listing = request.args.get("listing", "all").lower()
+    if listing not in ("listed", "unlisted"):
+        listing = "all"
+    cls = request.args.get("class", "all")
+    if cls not in PBT_CLASSES:
+        cls = "all"
+    selected = None
+    if request.method == "POST":
+        selected = set((request.get_json(silent=True) or {}).get("keys") or [])
+        if not selected:
+            return jsonify({"status": "error", "message": "No rows selected."}), 400
+    elif listing == "all" and slug != "csr-corporates":
+        return send_file(cfg["file"], as_attachment=True, download_name=cfg["download"])
+    # Filtered / selected download (or CSR with Class columns): rebuild a workbook.
+    import openpyxl
+    headers, data = _read_universe_rows(cfg["file"])
+    if selected is not None:
+        key_fn = _row_key_fn(headers)
+        if not key_fn:
+            abort(400)
+        rows = [r for r in data if key_fn(r) in selected]
+        suffix = "_selected"
+    else:
+        rows = _filter_by_pbt_class(headers, _filter_by_listing(headers, data, listing), cls)
+        suffix = "".join(f"_{s}" for s in (listing, cls) if s != "all")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for r in rows:
+        ws.append(list(r))
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    base, ext = os.path.splitext(cfg["download"])
+    return send_file(out, as_attachment=True, download_name=f"{base}{suffix}{ext}",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.route("/lead-generation/<slug>/delete", methods=["POST"])
-@login_required
+@admin_required
 def lead_generation_delete(slug):
     cfg = LEAD_GEN_CATEGORIES.get(slug)
     if not cfg:
