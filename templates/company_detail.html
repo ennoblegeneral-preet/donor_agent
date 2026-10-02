@@ -275,6 +275,12 @@
                 Status: {{ display_status }} · {{ evidence.get('sources_checked', 0) }} sources checked
             </div>
             {% endif %}
+            {% if evidence.get('filled_by_agent') %}
+            <div style="margin-top: 5px; font-size: 11px; color: #c4b5fd;"
+                title="{{ (evidence.get('agent_queries') or []) | join(' | ') }}">
+                Found by AI agent (follow-up search)
+            </div>
+            {% endif %}
             {% if evidence.get('evidence') %}
             <div style="margin-top: 7px; font-size: 12px; color: #cbd5e1;">{{ evidence.get('evidence') }}</div>
             {% endif %}

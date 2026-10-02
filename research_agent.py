@@ -15,6 +15,9 @@ from search_tool import (
     search_education_spend_data,
     search_unlisted_company_financials,
     search_person_linkedin,
+    agentic_gap_fill,
+    submit_with_context,
+    GAP_FILL_FIELD_HINTS,
 )
 from extraction_tool import extract_research_with_contact, extract_education_fields, extract_geography_fields
 from models import CompanyResearch
@@ -81,6 +84,80 @@ from search_tool import set_search_context
 
 from concurrent.futures import ThreadPoolExecutor
 
+def _run_education_gap_fill(company_id: str, company_name: str, education_search: dict, education_evidence: dict):
+    """Agent step for the education pass: for every education field the fixed
+    keyword searches came back empty on (status "exhausted"), an LLM plans new
+    targeted queries, runs them, and re-verifies ONLY those fields against the
+    new sources. Fields already found (Yes/No) or whose search failed are never
+    touched. Returns (education_evidence, report).
+
+    Costs nothing when no education field is empty; otherwise 1 planning LLM
+    call + up to GAP_FILL_MAX_QUERIES searches + 1 verification LLM call."""
+    missing = [f for f in GAP_FILL_FIELD_HINTS
+               if (education_evidence.get(f) or {}).get("status") == "exhausted"]
+    report = {"missing_before": missing, "queries": [], "filled": [], "sources_added": 0}
+    if not missing:
+        report["missing_after"] = []
+        return education_evidence, report
+
+    already_checked = {
+        s.get("url")
+        for details in education_search.values()
+        for s in (details.get("sources") or [])
+    }
+    check_cancel(company_id)  # stop before the gap-fill LLM planning + searches
+    gap = agentic_gap_fill(company_name, missing, exclude_urls=already_checked)
+    report["queries"] = gap["queries"]
+    if gap.get("error"):
+        report["error"] = gap["error"].get("message")
+
+    by_field = {}
+    for s in gap["sources"]:
+        if s["url"].lower().endswith(".pdf"):
+            pdf_text = extract_pdf_text(s["url"])
+            if pdf_text:
+                s["text"] = pdf_text[:30000]
+        by_field.setdefault(s["target_field"], []).append(s)
+    report["sources_added"] = len(gap["sources"])
+
+    if by_field:
+        # Verify only the gap fields, against only the agent's new sources. Fields
+        # left out of gap_search come back "Not Found" and are ignored below.
+        gap_search = {
+            field: {"sources": srcs, "attempts": 1, "sources_checked": len(srcs), "errors": []}
+            for field, srcs in by_field.items()
+        }
+        check_cancel(company_id)  # stop before the gap-fill verification LLM call
+        gap_evidence, gap_error = extract_education_fields(company_name, gap_search)
+        if gap_error:
+            report["error"] = gap_error.get("message")
+        else:
+            for field, srcs in by_field.items():
+                old = education_evidence.get(field) or {}
+                new = gap_evidence.get(field) or {}
+                new_links = [{"url": s["url"], "title": s.get("title") or ""} for s in srcs]
+                if new.get("status") == "found":
+                    new["checked_sources"] = (old.get("checked_sources") or []) + new_links
+                    new["attempts"] = (old.get("attempts") or 0) + 1
+                    new["sources_checked"] = (old.get("sources_checked") or 0) + len(srcs)
+                    new["filled_by_agent"] = True
+                    new["agent_queries"] = [q["query"] for q in gap["queries"] if q["field"] == field]
+                    education_evidence[field] = new
+                    report["filled"].append(field)
+                else:
+                    # Still nothing - keep "exhausted", but list the extra links checked.
+                    old["checked_sources"] = (old.get("checked_sources") or []) + new_links
+                    old["sources_checked"] = (old.get("sources_checked") or 0) + len(srcs)
+
+    report["missing_after"] = [f for f in missing if f not in report["filled"]]
+    print(
+        f"[GapFill] {company_name} education: empty {len(missing)} -> "
+        f"{len(report['missing_after'])}, filled {report['filled']}, "
+        f"+{report['sources_added']} sources"
+    )
+    return education_evidence, report
+
+
 def research_company(company_id: str, company_name: str, website: str = None):
     # Ensure search context is loaded from company creator if available
     try:
@@ -95,8 +172,8 @@ def research_company(company_id: str, company_name: str, website: str = None):
     check_cancel(company_id)  # stop before spending any search credits
     # Multi-stage search: Run contact search and CSR info search concurrently to save execution time
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_contact = executor.submit(search_contact_sources, company_name, website)
-        future_csr = executor.submit(search_company_csr_info, company_name, website)
+        future_contact = submit_with_context(executor, search_contact_sources, company_name, website)
+        future_csr = submit_with_context(executor, search_company_csr_info, company_name, website)
         
         sources_data = future_contact.result()
         csr_info = future_csr.result()
@@ -149,12 +226,23 @@ def research_company(company_id: str, company_name: str, website: str = None):
     education_evidence = {}
     education_error = None
     education_search = {}
+    gap_fill_report = None
     check_cancel(company_id)  # stop before the education search + extraction pass
     try:
         education_search = search_education_fields(company_name, website)
         education_evidence, education_error = extract_education_fields(
             company_name, education_search
         )
+        # Agentic gap-fill: an LLM plans new searches for education fields the fixed
+        # keyword queries found nothing for. GAP_FILL_ENABLED=false in .env turns it off.
+        if not education_error and os.getenv("GAP_FILL_ENABLED", "true").lower().strip() != "false":
+            try:
+                education_evidence, gap_fill_report = _run_education_gap_fill(
+                    company_id, company_name, education_search, education_evidence
+                )
+            except Exception as exc:
+                gap_fill_report = {"error": str(exc)}
+                print(f"[GapFill Warning] Education gap-fill failed for {company_name}: {exc}")
         if not education_error:
             previous = get_company(company_id) or {}
             previous_research = previous.get("research_json") or {}
@@ -246,6 +334,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
         "education_fitment_evidence": education_evidence,
         "education_fitment_error": education_error,
         "all_sources": all_sources,
+        "gap_fill_report": gap_fill_report,
     }
     if llm_error:
         update_fields["last_error"] = llm_error

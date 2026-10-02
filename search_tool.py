@@ -666,6 +666,117 @@ def search_company_geography(company_name: str, website: str = None) -> dict:
     return {"sources": sources}
 
 
+# What each education field means, in plain words - shown to the planner LLM
+# so it writes queries aimed at the actual programme type, not the field name.
+GAP_FILL_FIELD_HINTS = {
+    "csr_stem_education": "STEM / science labs / computer labs / robotics / coding / Atal Tinkering Labs / digital learning",
+    "csr_school_infra_transformation": "school infrastructure: classrooms, toilets/sanitation, drinking water, school buildings, libraries, smart classrooms",
+    "csr_holistic_transformation": "holistic / whole-school transformation, school adoption, comprehensive school development",
+    "csr_anganwadi_transformation": "Anganwadi centres, early childhood care, pre-schools, child / maternal nutrition",
+    "csr_quality_education": "quality education: teacher training, scholarships, literacy/numeracy, learning outcomes, remedial classes",
+    "csr_model_school_transformation": "model schools, government school upgradation, PM SHRI / Adarsh schools, district-level school programmes",
+}
+
+GAP_FILL_MAX_QUERIES = 4
+
+
+def agentic_gap_fill(company_name: str, missing_fields: list, exclude_urls: set = None) -> dict:
+    """Agent step for the education pass: an LLM looks at which education fields
+    the fixed EDUCATION_FIELD_QUERIES searches came back empty on, writes new
+    targeted queries for exactly those fields, and runs them. Returns new India +
+    company-relevant sources, each tagged with the field it was searched for, in
+    the same shape search_education_fields() produces.
+
+    Unlike the fixed templates (same query for every company), these queries are
+    decided per company from what's actually missing - so it only spends search
+    credits when an education field is empty, and only on that field. Capped at
+    GAP_FILL_MAX_QUERIES searches + 1 LLM call per call."""
+    from llm_service import call_llm_safe  # local import: llm_service is optional for pure-search callers
+
+    exclude_urls = set(exclude_urls or ())
+    report = {"queries": [], "sources": [], "error": None}
+    fields = [f for f in missing_fields if f in GAP_FILL_FIELD_HINTS]
+    if not fields:
+        return report
+
+    wanted = "\n".join(f'- {f}: {GAP_FILL_FIELD_HINTS[f]}' for f in fields)
+    prompt = f"""You plan web searches to find evidence of an Indian company's CSR education programmes.
+
+Company: "{company_name}"
+A standard keyword search already ran but found NO evidence for these education programme types:
+{wanted}
+
+Write at most {GAP_FILL_MAX_QUERIES} Google search queries most likely to find evidence that
+"{company_name}" (or its CSR foundation) funds or runs these programmes.
+Guidance:
+- Think about how the company or its foundation would actually describe the programme (named
+  initiatives, foundation names, partner NGOs, "project", "programme", district/state names).
+- Good sources: CSR / sustainability / BRSR reports, the company's CSR or foundation page,
+  csrbox.org project pages, news about the programme.
+- One query per field; you may combine two closely related fields in one query.
+- Keep each query short. Do not chain many OR terms.
+- Prefer open-web queries. Use site: in AT MOST ONE query (it hides every other source), as a
+  standalone term at the end, never inside parentheses.
+- Always include the company name.
+
+Return JSON only: {{"queries": [{{"field": "<one field name from the list above>", "query": "<search query>"}}]}}"""
+
+    plan, err = call_llm_safe(prompt, json_mode=True, temperature=0.2)
+    if err:
+        report["error"] = err
+        return report
+
+    planned = []
+    for q in (plan or {}).get("queries", [])[:GAP_FILL_MAX_QUERIES]:
+        if not isinstance(q, dict):
+            continue
+        query = (q.get("query") or "").strip()
+        field = (q.get("field") or "").strip()
+        # Every source must land under a field that was actually missing - a
+        # query for an unknown / already-found field would have nowhere to go.
+        if query and len(query) <= 300 and field in fields:
+            planned.append({"field": field, "query": query})
+    report["queries"] = planned
+    if not planned:
+        return report
+
+    def run(item):
+        try:
+            return item, _execute_search(item["query"], max_results=5, include_raw_content=True), None
+        except Exception as exc:
+            return item, None, classify_error(exc)
+
+    seen = set(exclude_urls)
+    with ThreadPoolExecutor(max_workers=len(planned)) as executor:
+        futures = [submit_with_context(executor, run, item) for item in planned]
+        for future in as_completed(futures):
+            item, result, error = future.result()
+            print(f"[GapFill] {company_name} ({item['field']}): {item['query']}")
+            if error:
+                report["error"] = report["error"] or error
+                continue
+            for r in result.get("results", []):
+                url = r.get("url", "")
+                text = r.get("raw_content") or r.get("content", "")
+                if not url or url in seen or not text or len(text) < 80:
+                    continue
+                if not _is_india_result(url, text):
+                    continue
+                if not _mentions_company(company_name, r.get("title", ""), text):
+                    print(f"[GapFill] Dropped off-topic (no company mention): {url}")
+                    continue
+                seen.add(url)
+                report["sources"].append({
+                    "url": url,
+                    "title": r.get("title", ""),
+                    "text": text[:8000],
+                    "query": item["query"],
+                    "target_field": item["field"],
+                    "agent_gap_fill": True,
+                })
+    return report
+
+
 SCREENER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -958,7 +1069,7 @@ def _mentions_company(company_name: str, *texts) -> bool:
 def search_education_fields(company_name: str, website: str = None) -> dict:
     domain = urlparse(website).netloc.replace("www.", "") if website else ""
 
-    def _run_query(query, attempt, sources, seen_urls, errors):
+    def _run_query(query, attempt, field, sources, seen_urls, errors):
         """Execute one education query and append India + company-relevant hits
         to `sources`. Returns the number of new sources added."""
         added = 0
@@ -1001,7 +1112,7 @@ def search_education_fields(company_name: str, website: str = None) -> dict:
         for attempt, template in enumerate(templates, start=1):
             query = template.format(company=company_name)
             print(f"[Education Search {attempt}/{len(templates)}] {field}: {query}")
-            _run_query(query, attempt, sources, seen_urls, errors)
+            _run_query(query, attempt, field, sources, seen_urls, errors)
 
         # Fallback pass: only if the open web found nothing, retry scoped to the
         # company's own website to catch anything indexed only there.
@@ -1009,7 +1120,7 @@ def search_education_fields(company_name: str, website: str = None) -> dict:
             attempt += 1
             query = f"{templates[0].format(company=company_name)} site:{domain}"
             print(f"[Education Search {attempt} (site fallback)] {field}: {query}")
-            _run_query(query, attempt, sources, seen_urls, errors)
+            _run_query(query, attempt, field, sources, seen_urls, errors)
 
         return field, {
             "sources": sources,
