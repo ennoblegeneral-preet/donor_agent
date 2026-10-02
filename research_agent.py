@@ -534,23 +534,25 @@ def research_company_with_financials(company_id: str, company_name: str, website
             # the PDF text has no links, so this is a separate search per name. Name-only
             # matching is fuzzy (common names can return the wrong profile), so this is
             # NOT a verified identity match - just a starting point for manual outreach.
-            committee_members = (csr_data or {}).get("committee_members") or []
-            if committee_members:
-                print(f"[Step 5b] {len(committee_members)} CSR Committee Member(s) ke LinkedIn profiles dhundh rahe hain...")
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    futures = {
-                        executor.submit(search_person_linkedin, member, company_name): member
-                        for member in committee_members
-                    }
-                    for future in futures:
-                        member = futures[future]
-                        try:
-                            committee_members_linkedin[member] = future.result()
-                        except Exception as e:
-                            print(f"[⚠️] LinkedIn lookup failed for {member}: {e}")
-                            committee_members_linkedin[member] = None
-                found_count = sum(1 for v in committee_members_linkedin.values() if v)
-                print(f"[✅] {found_count}/{len(committee_members)} committee member LinkedIn profiles found (unverified matches)")
+            # [DISABLED to save 1 search credit per committee member - committee member
+            # names are still saved from csr_data; committee_members_linkedin stays empty]
+            # committee_members = (csr_data or {}).get("committee_members") or []
+            # if committee_members:
+            #     print(f"[Step 5b] {len(committee_members)} CSR Committee Member(s) ke LinkedIn profiles dhundh rahe hain...")
+            #     with ThreadPoolExecutor(max_workers=2) as executor:
+            #         futures = {
+            #             executor.submit(search_person_linkedin, member, company_name): member
+            #             for member in committee_members
+            #         }
+            #         for future in futures:
+            #             member = futures[future]
+            #             try:
+            #                 committee_members_linkedin[member] = future.result()
+            #             except Exception as e:
+            #                 print(f"[⚠️] LinkedIn lookup failed for {member}: {e}")
+            #                 committee_members_linkedin[member] = None
+            #     found_count = sum(1 for v in committee_members_linkedin.values() if v)
+            #     print(f"[✅] {found_count}/{len(committee_members)} committee member LinkedIn profiles found (unverified matches)")
         else:
             print(f"[⚠️] Saare candidate sources se PDF extract nahi ho saka, CSR data skip ho raha hai")
     else:
