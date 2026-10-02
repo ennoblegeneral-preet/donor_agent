@@ -26,6 +26,18 @@ scratch/
 *.csv
 *_SUMMARY.txt
 debug_reports/
+rules.txt
+Lead_Generation_Sources.docx
+company_pbt_cache.jsonl
+
+# Local scratch / debug scripts & saved pages (not for the repo)
+referest.py
+prompy.py
+tp.py
+debug_pdf_parse.py
+test_financial.py
+DonorIQ Lead Generation*Data Source Map.html
+DonorIQ Lead Generation*Data Source Map_files/
 
 
 # Local docs, screenshots & design drafts (optional local files)

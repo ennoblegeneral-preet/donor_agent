@@ -285,16 +285,35 @@ def dedupe(records):
 
 
 # ---------------------------------------------------------------------------
+# Trim -- drop the smallest unlisted companies (lowest MCA paid-up capital)
+# ---------------------------------------------------------------------------
+UNLISTED_DROP_COUNT = 3000
+
+def drop_lowest_unlisted(records, n=UNLISTED_DROP_COUNT):
+    """Remove the `n` unlisted companies with the lowest paid-up capital.
+    Unlisted companies without a capital figure (non-MCA sources) are kept."""
+    ranked = sorted((r for r in records
+                     if r["listing_status"] == "Unlisted" and r.get("paidup_capital") is not None),
+                    key=lambda r: r["paidup_capital"])
+    drop = {id(r) for r in ranked[:n]}
+    kept = [r for r in records if id(r) not in drop]
+    print(f"[trim] dropped {len(drop)} lowest paid-up unlisted -> {len(kept)} remain")
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Write Excel
 # ---------------------------------------------------------------------------
 def write_excel(records, filename="company_universe.xlsx"):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Company Universe"
-    ws.append(["Company Name", "ISIN", "Sector", "Listing Status", "Source(s)"])
+    ws.append(["Company Name", "ISIN", "Sector", "Listing Status",
+               "Paid-up Capital (Rs)", "Source(s)"])
     for rec in sorted(records, key=lambda r: r["company_name"].lower()):
         ws.append([rec["company_name"], rec["isin"] or "",
-                   rec["sector"] or "", rec["listing_status"], rec["source"]])
+                   rec["sector"] or "", rec["listing_status"],
+                   rec.get("paidup_capital") or "", rec["source"]])
     wb.save(filename)
     print(f"[excel] wrote {len(records)} rows -> {filename}")
 

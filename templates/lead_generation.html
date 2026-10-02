@@ -10,6 +10,20 @@
 {% block page_subtitle %}Generate {{ label }} leads into a deduplicated list, ready for research.{% endblock %}
 
 {% block content %}
+<style>
+    .listing-filter { flex: 1; display: flex; border: 1px solid #2E3245; border-radius: 0.5rem; overflow: hidden; }
+    .listing-filter button {
+        flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.125rem;
+        padding: 0.5rem 1rem; font-size: 0.75rem; font-weight: 500;
+        color: #c7c4d7; background: transparent; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .listing-filter-count { font-size: 1rem; font-weight: 600; color: #e2e2eb; font-variant-numeric: tabular-nums; }
+    .listing-filter button.active .listing-filter-count { color: #c0c1ff; }
+    .listing-filter button + button { border-left: 1px solid #2E3245; }
+    .listing-filter button:hover { background: rgba(255,255,255,0.05); }
+    .listing-filter button.active { background: rgba(192,193,255,0.15); color: #c0c1ff; }
+    .listing-filter button:disabled { opacity: 0.6; cursor: wait; }
+</style>
 
 {% if status != 'ready' %}
 <!-- Pending: no source configured yet -->
@@ -72,13 +86,74 @@
         </div>
         <div id="statTotal" class="font-display-lg text-display-lg text-on-surface">{{ stats.total if stats else 0 }}</div>
     </div>
+    {% if slug == 'csr-corporates' %}
+    {% set counts = (stats.counts if stats and stats.counts else {}) %}
+    <div class="glass-card rounded-xl p-stack-md col-span-1 md:col-span-3 flex flex-col">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-primary/70 text-[20px]">filter_list</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Listing Filter</h3>
+        </div>
+        <div id="listingFilter" class="listing-filter" role="group" aria-label="Filter by listing status">
+            {% for key, name in [('all', 'All'), ('listed', 'Listed'), ('unlisted', 'Unlisted')] %}
+            <button type="button" data-listing="{{ key }}" class="{% if key == 'all' %}active{% endif %}" onclick="setListingFilter('{{ key }}')">
+                <span class="listing-filter-name">{{ name }}</span>
+                <span class="listing-filter-count" data-count="{{ key }}">{{ counts.get(key, 0) }}</span>
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    {% set class_counts = (stats.class_counts if stats and stats.class_counts else {}) %}
+    <div id="classFilterCard" class="glass-card rounded-xl p-stack-md col-span-2 md:col-span-4 flex flex-col hidden">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-primary/70 text-[20px]">workspace_premium</span>
+                <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Class</h3>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+                <span id="selectedInfo" class="font-body-sm text-body-sm text-on-surface-variant hidden">
+                    <span id="selectedCount">0</span> selected ·
+                    <button type="button" onclick="clearSelection()" class="underline hover:text-on-surface">Clear</button>
+                </span>
+                <a id="classDownloadAllBtn" href="/lead-generation/{{ slug }}/download?listing=listed"
+                    class="btn-secondary px-3 py-1.5 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[18px]">download</span>
+                    Download All
+                </a>
+                <button type="button" id="downloadSelectedBtn" onclick="downloadSelected()" disabled
+                    class="btn-secondary px-3 py-1.5 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center gap-1">
+                    <span class="material-symbols-outlined text-[18px]">download</span>
+                    Download Selected (<span id="downloadSelectedCount">0</span>)
+                </button>
+            </div>
+        </div>
+        <div id="classFilter" class="listing-filter" role="group" aria-label="Filter by class">
+            {% for key, name in [('all', 'All'), ('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D'), ('NA', 'NA'), ('Review', 'Review')] %}
+            <button type="button" data-class="{{ key }}" class="{% if key == 'all' %}active{% endif %}" onclick="setClassFilter('{{ key }}')">
+                <span class="listing-filter-name">{{ name }}</span>
+                <span class="listing-filter-count" data-class-count="{{ key }}">{{ class_counts.get(key, 0) }}</span>
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Preview table -->
 <div id="previewPanel" class="glass-panel rounded-xl p-stack-lg {% if not stats %}hidden{% endif %}">
-    <div class="flex items-center justify-between mb-stack-md">
-        <h3 class="font-headline-md text-headline-md text-on-surface">Preview <span class="font-body-sm text-body-sm text-on-surface-variant">(first 25 rows)</span></h3>
-        <span class="font-body-sm text-body-sm text-on-surface-variant">Generated: <span id="genAt">{{ stats.generated_at if stats else '' }}</span></span>
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-stack-md">
+        <h3 class="font-headline-md text-headline-md text-on-surface">Preview <span class="font-body-sm text-body-sm text-on-surface-variant">(25 rows per page)</span></h3>
+        <div class="flex items-center gap-3 flex-wrap">
+            <input id="previewSearch" type="search" placeholder="Search company…" oninput="onPreviewSearch()"
+                class="bg-transparent border border-[#2E3245] rounded-lg px-3 py-1.5 font-body-sm text-body-sm text-on-surface">
+            <button type="button" id="prevPageBtn" onclick="changePage(-1)" class="btn-secondary px-3 py-1.5 rounded-lg font-label-md text-label-md" aria-label="Previous page">
+                <span class="material-symbols-outlined text-[18px]">chevron_left</span>
+            </button>
+            <span class="font-body-sm text-body-sm text-on-surface-variant whitespace-nowrap">Page <span id="pageNum">{{ stats.page if stats else 1 }}</span> of <span id="pageCount">{{ stats.pages if stats else 1 }}</span></span>
+            <button type="button" id="nextPageBtn" onclick="changePage(1)" class="btn-secondary px-3 py-1.5 rounded-lg font-label-md text-label-md" aria-label="Next page">
+                <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+            </button>
+            <span class="font-body-sm text-body-sm text-on-surface-variant">Generated: <span id="genAt">{{ stats.generated_at if stats else '' }}</span></span>
+        </div>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse">
@@ -116,6 +191,107 @@
 <script>
     const SLUG = "{{ slug }}";
     let leadGenPoller = null;
+    let listingFilter = 'all';
+    let classFilter = 'all';
+    let previewPage = 1;
+    let previewPages = 1;
+    let searchTimer = null;
+    let pageKeys = [];
+    // Selected row keys (ISIN, else company name) — kept across filters and pages.
+    const selectedKeys = new Set();
+
+    function loadStats(listing, cls, page) {
+        const buttons = document.querySelectorAll('#listingFilter button, #classFilter button');
+        buttons.forEach(b => b.disabled = true);
+        const params = new URLSearchParams({ listing, class: cls, page,
+            q: document.getElementById('previewSearch').value.trim() });
+        fetch(`/lead-generation/${SLUG}/stats?${params}`)
+            .then(r => r.json().then(data => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok) throw new Error(data.message || 'Could not apply filter.');
+                renderStats(data);
+            })
+            .catch(err => showNotification(err.message, 'error'))
+            .finally(() => buttons.forEach(b => b.disabled = false));
+    }
+
+    // Class only applies to listed companies, so switching listing resets it.
+    function setListingFilter(listing) { loadStats(listing, 'all', 1); }
+    function setClassFilter(cls) { loadStats(listingFilter, cls, 1); }
+    function changePage(delta) {
+        const page = previewPage + delta;
+        if (page >= 1 && page <= previewPages) loadStats(listingFilter, classFilter, page);
+    }
+    function onPreviewSearch() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => loadStats(listingFilter, classFilter, 1), 300);
+    }
+
+    function updateDownloadLink() {
+        const params = new URLSearchParams();
+        if (listingFilter !== 'all') params.set('listing', listingFilter);
+        if (classFilter !== 'all') params.set('class', classFilter);
+        const qs = params.toString();
+        const href = `/lead-generation/${SLUG}/download${qs ? '?' + qs : ''}`;
+        document.getElementById('downloadBtn').href = href;
+        const classAll = document.getElementById('classDownloadAllBtn');
+        if (classAll) classAll.href = href;
+    }
+
+    function toggleRow(key, checked) {
+        if (checked) selectedKeys.add(key); else selectedKeys.delete(key);
+        updateSelectionUI();
+    }
+
+    function togglePage(checked) {
+        pageKeys.forEach(k => checked ? selectedKeys.add(k) : selectedKeys.delete(k));
+        document.querySelectorAll('#previewBody input[type=checkbox]').forEach(cb => cb.checked = checked);
+        updateSelectionUI();
+    }
+
+    function clearSelection() {
+        selectedKeys.clear();
+        document.querySelectorAll('#previewBody input[type=checkbox]').forEach(cb => cb.checked = false);
+        updateSelectionUI();
+    }
+
+    function updateSelectionUI() {
+        const n = selectedKeys.size;
+        const info = document.getElementById('selectedInfo');
+        if (!info) return;
+        info.classList.toggle('hidden', n === 0);
+        document.getElementById('selectedCount').textContent = n;
+        document.getElementById('downloadSelectedCount').textContent = n;
+        document.getElementById('downloadSelectedBtn').disabled = n === 0;
+        const pageBox = document.getElementById('selectPageBox');
+        if (pageBox) pageBox.checked = pageKeys.length > 0 && pageKeys.every(k => selectedKeys.has(k));
+    }
+
+    function downloadSelected() {
+        if (!selectedKeys.size) return;
+        const btn = document.getElementById('downloadSelectedBtn');
+        btn.disabled = true;
+        fetch(`/lead-generation/${SLUG}/download`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keys: [...selectedKeys] }),
+        })
+            .then(r => {
+                if (!r.ok) return r.json().then(d => { throw new Error(d.message || 'Download failed.'); });
+                return r.blob();
+            })
+            .then(blob => {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'company_universe_selected.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(a.href);
+            })
+            .catch(err => showNotification(err.message, 'error'))
+            .finally(() => updateSelectionUI());
+    }
 
     function startLeadGen() {
         const btn = document.getElementById('runBtn');
@@ -164,6 +340,29 @@
 
     function renderStats(stats) {
         document.getElementById('statTotal').textContent = stats.total;
+        listingFilter = stats.listing || 'all';
+        document.querySelectorAll('#listingFilter button').forEach(b =>
+            b.classList.toggle('active', b.dataset.listing === listingFilter));
+        document.querySelectorAll('#listingFilter [data-count]').forEach(el => {
+            el.textContent = (stats.counts || {})[el.dataset.count] ?? 0;
+        });
+        classFilter = stats.class || 'all';
+        const classCard = document.getElementById('classFilterCard');
+        if (classCard) {
+            classCard.classList.toggle('hidden', !(listingFilter === 'listed' && stats.class_counts));
+            document.querySelectorAll('#classFilter button').forEach(b =>
+                b.classList.toggle('active', b.dataset.class === classFilter));
+            document.querySelectorAll('#classFilter [data-class-count]').forEach(el => {
+                el.textContent = (stats.class_counts || {})[el.dataset.classCount] ?? 0;
+            });
+        }
+        previewPage = stats.page || 1;
+        previewPages = stats.pages || 1;
+        document.getElementById('pageNum').textContent = previewPage;
+        document.getElementById('pageCount').textContent = previewPages;
+        document.getElementById('prevPageBtn').disabled = previewPage <= 1;
+        document.getElementById('nextPageBtn').disabled = previewPage >= previewPages;
+        updateDownloadLink();
         document.getElementById('statsRow').classList.remove('hidden');
         document.getElementById('downloadBtn').classList.remove('hidden');
         document.getElementById('deleteBtn').classList.remove('hidden');
@@ -171,9 +370,17 @@
         const genAt = document.getElementById('genAt');
         if (genAt && stats.generated_at) genAt.textContent = stats.generated_at;
 
-        // Header
+        // Header (+ select-page checkbox when rows are selectable)
+        pageKeys = stats.keys || [];
+        const selectable = Array.isArray(stats.keys);
         const head = document.getElementById('previewHead');
         head.innerHTML = '';
+        if (selectable) {
+            const th = document.createElement('th');
+            th.className = 'py-2 px-3';
+            th.innerHTML = '<input type="checkbox" id="selectPageBox" aria-label="Select all rows on this page" onchange="togglePage(this.checked)">';
+            head.appendChild(th);
+        }
         (stats.headers || []).forEach(h => {
             const th = document.createElement('th');
             th.className = 'py-2 px-3 font-label-sm text-xs font-semibold text-on-surface-variant uppercase';
@@ -183,9 +390,20 @@
         // Rows (textContent to avoid HTML injection)
         const body = document.getElementById('previewBody');
         body.innerHTML = '';
-        (stats.preview || []).forEach(row => {
+        (stats.preview || []).forEach((row, i) => {
             const tr = document.createElement('tr');
             tr.className = 'border-b border-[#2E3245]/50';
+            if (selectable) {
+                const td = document.createElement('td');
+                td.className = 'py-2 px-3';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = selectedKeys.has(pageKeys[i]);
+                cb.setAttribute('aria-label', 'Select row');
+                cb.addEventListener('change', () => toggleRow(pageKeys[i], cb.checked));
+                td.appendChild(cb);
+                tr.appendChild(td);
+            }
             row.forEach(cell => {
                 const td = document.createElement('td');
                 td.className = 'py-2 px-3 font-body-sm text-body-sm text-on-surface-variant';
@@ -194,6 +412,7 @@
             });
             body.appendChild(tr);
         });
+        updateSelectionUI();
     }
 
     function deleteLeadGen() {
@@ -224,7 +443,11 @@
         document.getElementById('runBtnLabel').textContent = 'Generate';
     }
 
+    const INITIAL_STATS = {{ stats|tojson if stats else 'null' }};
+
     window.addEventListener('DOMContentLoaded', () => {
+        // Render the first page through JS so paging/selection state starts in sync.
+        if (INITIAL_STATS) renderStats(INITIAL_STATS);
         if ('{{ job_state }}' === 'running') {
             document.getElementById('runBtn').disabled = true;
             document.getElementById('runBtnLabel').textContent = 'Running…';
