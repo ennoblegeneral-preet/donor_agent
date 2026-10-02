@@ -1,0 +1,236 @@
+{% extends "base_app.html" %}
+{% block title %}{{ label }} - Lead Generation - DonorIQ{% endblock %}
+{% block page_kicker %}
+<p class="font-label-md text-label-md text-primary uppercase tracking-wider mb-1 flex items-center gap-2">
+    <span class="w-1.5 h-1.5 rounded-full bg-primary pulse-active"></span>
+    Lead Generation
+</p>
+{% endblock %}
+{% block page_title %}{{ label }}{% endblock %}
+{% block page_subtitle %}Generate {{ label }} leads into a deduplicated list, ready for research.{% endblock %}
+
+{% block content %}
+
+{% if status != 'ready' %}
+<!-- Pending: no source configured yet -->
+<div class="glass-panel rounded-xl p-stack-lg text-center" style="padding: 4rem 2rem;">
+    <div class="text-[48px] mb-4">🚧</div>
+    <h3 class="font-headline-md text-headline-md text-on-surface mb-2">Source not configured yet</h3>
+    <p class="font-body-md text-body-md text-on-surface-variant max-w-xl mx-auto">
+        A data source for <strong>{{ label }}</strong> hasn't been wired up yet. This tab is a placeholder &mdash;
+        generation will work here once its source is added.
+    </p>
+</div>
+{% else %}
+
+<!-- Action panel -->
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+            <h3 class="font-headline-md text-headline-md text-on-surface mb-1">Generate {{ label }}</h3>
+            <p class="font-body-sm text-body-sm text-on-surface-variant max-w-2xl">
+                Scrapes the configured public sources, deduplicates the results, and writes one Excel file.
+                This is Step 1 &mdash; no research or scoring runs here.
+            </p>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+            <button type="button" id="runBtn" onclick="startLeadGen()"
+                class="btn-primary px-6 py-3 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[18px]">bolt</span>
+                <span id="runBtnLabel">Generate</span>
+            </button>
+            <a id="downloadBtn" href="/lead-generation/{{ slug }}/download"
+                class="btn-secondary px-5 py-3 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center gap-2 {% if not stats %}hidden{% endif %}">
+                <span class="material-symbols-outlined text-[18px]">download</span>
+                Download Excel
+            </a>
+            <button type="button" id="deleteBtn" onclick="deleteLeadGen()"
+                class="btn-secondary px-5 py-3 rounded-lg font-label-md text-label-md whitespace-nowrap flex items-center gap-2 {% if not stats %}hidden{% endif %}"
+                style="border-color:rgba(225,29,72,0.4); color:#fb7185;">
+                <span class="material-symbols-outlined text-[18px]">delete</span>
+                Delete Data
+            </button>
+        </div>
+    </div>
+
+    <div id="progressPanel" class="mt-stack-md {% if job_state != 'running' %}hidden{% endif %}">
+        <div class="flex items-center justify-between gap-3">
+            <span id="progressMsg" class="font-body-sm text-body-sm text-on-surface-variant">Starting…</span>
+            <span id="progressPct" class="font-mono-sm text-mono-sm text-on-surface-variant">0%</span>
+        </div>
+        <div class="progress-track mt-2"><div id="progressBar" class="progress-bar" style="width:0%;"></div></div>
+    </div>
+    <div id="errorMsg" class="mt-stack-md font-body-sm text-body-sm hidden" style="color:#f87171;"></div>
+</div>
+
+<!-- Total tile -->
+<div id="statsRow" class="grid grid-cols-2 md:grid-cols-4 gap-gutter mb-stack-lg {% if not stats %}hidden{% endif %}">
+    <div class="glass-card rounded-xl p-stack-md">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-primary/70 text-[20px]">database</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Total Records</h3>
+        </div>
+        <div id="statTotal" class="font-display-lg text-display-lg text-on-surface">{{ stats.total if stats else 0 }}</div>
+    </div>
+</div>
+
+<!-- Preview table -->
+<div id="previewPanel" class="glass-panel rounded-xl p-stack-lg {% if not stats %}hidden{% endif %}">
+    <div class="flex items-center justify-between mb-stack-md">
+        <h3 class="font-headline-md text-headline-md text-on-surface">Preview <span class="font-body-sm text-body-sm text-on-surface-variant">(first 25 rows)</span></h3>
+        <span class="font-body-sm text-body-sm text-on-surface-variant">Generated: <span id="genAt">{{ stats.generated_at if stats else '' }}</span></span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+            <thead>
+                <tr id="previewHead" class="border-b border-[#2E3245]">
+                    {% if stats %}{% for h in stats.headers %}
+                    <th class="py-2 px-3 font-label-sm text-xs font-semibold text-on-surface-variant uppercase">{{ h }}</th>
+                    {% endfor %}{% endif %}
+                </tr>
+            </thead>
+            <tbody id="previewBody">
+                {% if stats %}{% for row in stats.preview %}
+                <tr class="border-b border-[#2E3245]/50">
+                    {% for cell in row %}
+                    <td class="py-2 px-3 font-body-sm text-body-sm text-on-surface-variant">{{ cell }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}{% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Empty state -->
+<div id="emptyState" class="glass-panel rounded-xl p-stack-lg text-center {% if stats %}hidden{% endif %}" style="padding: 4rem 2rem;">
+    <div class="text-[48px] mb-4">🗂️</div>
+    <p class="font-body-md text-body-md text-on-surface-variant">No {{ label }} generated yet. Click <strong>Generate</strong> above to build the list.</p>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+{% if status == 'ready' %}
+<script>
+    const SLUG = "{{ slug }}";
+    let leadGenPoller = null;
+
+    function startLeadGen() {
+        const btn = document.getElementById('runBtn');
+        btn.disabled = true;
+        document.getElementById('runBtnLabel').textContent = 'Running…';
+        document.getElementById('errorMsg').classList.add('hidden');
+        document.getElementById('emptyState')?.classList.add('hidden');
+        document.getElementById('progressPanel').classList.remove('hidden');
+        fetch(`/lead-generation/${SLUG}/run`, { method: 'POST' })
+            .then(r => r.json().then(data => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok && data.status !== 'already_running') throw new Error(data.message || 'Could not start.');
+                pollLeadGen();
+            })
+            .catch(err => { showLeadGenError(err.message); resetRunBtn(); });
+    }
+
+    function pollLeadGen() {
+        if (leadGenPoller) clearInterval(leadGenPoller);
+        leadGenPoller = setInterval(async () => {
+            try {
+                const res = await fetch(`/lead-generation/${SLUG}/progress`);
+                const p = await res.json();
+                document.getElementById('progressMsg').textContent = p.message || '';
+                document.getElementById('progressPct').textContent = `${p.percent || 0}%`;
+                document.getElementById('progressBar').style.width = `${p.percent || 0}%`;
+                if (p.state === 'complete') {
+                    clearInterval(leadGenPoller);
+                    if (p.stats) renderStats(p.stats);
+                    document.getElementById('progressPanel').classList.add('hidden');
+                    resetRunBtn();
+                    showNotification(p.message, 'success');
+                } else if (p.state === 'error') {
+                    clearInterval(leadGenPoller);
+                    showLeadGenError(p.message);
+                    document.getElementById('progressPanel').classList.add('hidden');
+                    resetRunBtn();
+                }
+            } catch (e) {
+                clearInterval(leadGenPoller);
+                showLeadGenError('Lost connection to progress endpoint.');
+                resetRunBtn();
+            }
+        }, 1000);
+    }
+
+    function renderStats(stats) {
+        document.getElementById('statTotal').textContent = stats.total;
+        document.getElementById('statsRow').classList.remove('hidden');
+        document.getElementById('downloadBtn').classList.remove('hidden');
+        document.getElementById('deleteBtn').classList.remove('hidden');
+        document.getElementById('previewPanel').classList.remove('hidden');
+        const genAt = document.getElementById('genAt');
+        if (genAt && stats.generated_at) genAt.textContent = stats.generated_at;
+
+        // Header
+        const head = document.getElementById('previewHead');
+        head.innerHTML = '';
+        (stats.headers || []).forEach(h => {
+            const th = document.createElement('th');
+            th.className = 'py-2 px-3 font-label-sm text-xs font-semibold text-on-surface-variant uppercase';
+            th.textContent = h;
+            head.appendChild(th);
+        });
+        // Rows (textContent to avoid HTML injection)
+        const body = document.getElementById('previewBody');
+        body.innerHTML = '';
+        (stats.preview || []).forEach(row => {
+            const tr = document.createElement('tr');
+            tr.className = 'border-b border-[#2E3245]/50';
+            row.forEach(cell => {
+                const td = document.createElement('td');
+                td.className = 'py-2 px-3 font-body-sm text-body-sm text-on-surface-variant';
+                td.textContent = cell == null ? '' : cell;
+                tr.appendChild(td);
+            });
+            body.appendChild(tr);
+        });
+    }
+
+    function deleteLeadGen() {
+        if (!confirm('Delete the generated data? You can regenerate it anytime.')) return;
+        fetch(`/lead-generation/${SLUG}/delete`, { method: 'POST' })
+            .then(r => r.json().then(data => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                if (!ok) throw new Error(data.message || 'Could not delete.');
+                document.getElementById('statsRow').classList.add('hidden');
+                document.getElementById('previewPanel').classList.add('hidden');
+                document.getElementById('downloadBtn').classList.add('hidden');
+                document.getElementById('deleteBtn').classList.add('hidden');
+                document.getElementById('emptyState')?.classList.remove('hidden');
+                showNotification('Data deleted.', 'success');
+            })
+            .catch(err => showNotification(err.message, 'error'));
+    }
+
+    function showLeadGenError(msg) {
+        const el = document.getElementById('errorMsg');
+        el.textContent = msg;
+        el.classList.remove('hidden');
+    }
+
+    function resetRunBtn() {
+        const btn = document.getElementById('runBtn');
+        btn.disabled = false;
+        document.getElementById('runBtnLabel').textContent = 'Generate';
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+        if ('{{ job_state }}' === 'running') {
+            document.getElementById('runBtn').disabled = true;
+            document.getElementById('runBtnLabel').textContent = 'Running…';
+            pollLeadGen();
+        }
+    });
+</script>
+{% endif %}
+{% endblock %}

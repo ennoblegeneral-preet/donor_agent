@@ -15,6 +15,9 @@ from search_tool import (
     search_education_spend_data,
     search_unlisted_company_financials,
     search_person_linkedin,
+    agentic_gap_fill,
+    submit_with_context,
+    GAP_FILL_FIELD_HINTS,
 )
 from extraction_tool import extract_research_with_contact, extract_education_fields, extract_geography_fields
 from models import CompanyResearch
@@ -28,6 +31,7 @@ from financial_extractor import (
 )
 from pdf_utils import extract_csr_section_text, _headers_for
 from error_utils import no_data_error
+from cancellation import check as check_cancel
 from redis_cache import get_json, set_json, make_key
 
 
@@ -46,7 +50,7 @@ def extract_pdf_text(pdf_url: str) -> str:
             raise ValueError(f"Response Content-Type is not PDF: {content_type}")
 
         # Limit to first 10MB to protect memory
-        max_bytes = 10 * 1024 * 1024
+        max_bytes = 100 * 1024 * 1024
         chunks = []
         size = 0
         for chunk in response.iter_content(chunk_size=128 * 1024):
@@ -80,6 +84,80 @@ from search_tool import set_search_context
 
 from concurrent.futures import ThreadPoolExecutor
 
+def _run_education_gap_fill(company_id: str, company_name: str, education_search: dict, education_evidence: dict):
+    """Agent step for the education pass: for every education field the fixed
+    keyword searches came back empty on (status "exhausted"), an LLM plans new
+    targeted queries, runs them, and re-verifies ONLY those fields against the
+    new sources. Fields already found (Yes/No) or whose search failed are never
+    touched. Returns (education_evidence, report).
+
+    Costs nothing when no education field is empty; otherwise 1 planning LLM
+    call + up to GAP_FILL_MAX_QUERIES searches + 1 verification LLM call."""
+    missing = [f for f in GAP_FILL_FIELD_HINTS
+               if (education_evidence.get(f) or {}).get("status") == "exhausted"]
+    report = {"missing_before": missing, "queries": [], "filled": [], "sources_added": 0}
+    if not missing:
+        report["missing_after"] = []
+        return education_evidence, report
+
+    already_checked = {
+        s.get("url")
+        for details in education_search.values()
+        for s in (details.get("sources") or [])
+    }
+    check_cancel(company_id)  # stop before the gap-fill LLM planning + searches
+    gap = agentic_gap_fill(company_name, missing, exclude_urls=already_checked)
+    report["queries"] = gap["queries"]
+    if gap.get("error"):
+        report["error"] = gap["error"].get("message")
+
+    by_field = {}
+    for s in gap["sources"]:
+        if s["url"].lower().endswith(".pdf"):
+            pdf_text = extract_pdf_text(s["url"])
+            if pdf_text:
+                s["text"] = pdf_text[:30000]
+        by_field.setdefault(s["target_field"], []).append(s)
+    report["sources_added"] = len(gap["sources"])
+
+    if by_field:
+        # Verify only the gap fields, against only the agent's new sources. Fields
+        # left out of gap_search come back "Not Found" and are ignored below.
+        gap_search = {
+            field: {"sources": srcs, "attempts": 1, "sources_checked": len(srcs), "errors": []}
+            for field, srcs in by_field.items()
+        }
+        check_cancel(company_id)  # stop before the gap-fill verification LLM call
+        gap_evidence, gap_error = extract_education_fields(company_name, gap_search)
+        if gap_error:
+            report["error"] = gap_error.get("message")
+        else:
+            for field, srcs in by_field.items():
+                old = education_evidence.get(field) or {}
+                new = gap_evidence.get(field) or {}
+                new_links = [{"url": s["url"], "title": s.get("title") or ""} for s in srcs]
+                if new.get("status") == "found":
+                    new["checked_sources"] = (old.get("checked_sources") or []) + new_links
+                    new["attempts"] = (old.get("attempts") or 0) + 1
+                    new["sources_checked"] = (old.get("sources_checked") or 0) + len(srcs)
+                    new["filled_by_agent"] = True
+                    new["agent_queries"] = [q["query"] for q in gap["queries"] if q["field"] == field]
+                    education_evidence[field] = new
+                    report["filled"].append(field)
+                else:
+                    # Still nothing - keep "exhausted", but list the extra links checked.
+                    old["checked_sources"] = (old.get("checked_sources") or []) + new_links
+                    old["sources_checked"] = (old.get("sources_checked") or 0) + len(srcs)
+
+    report["missing_after"] = [f for f in missing if f not in report["filled"]]
+    print(
+        f"[GapFill] {company_name} education: empty {len(missing)} -> "
+        f"{len(report['missing_after'])}, filled {report['filled']}, "
+        f"+{report['sources_added']} sources"
+    )
+    return education_evidence, report
+
+
 def research_company(company_id: str, company_name: str, website: str = None):
     # Ensure search context is loaded from company creator if available
     try:
@@ -91,10 +169,11 @@ def research_company(company_id: str, company_name: str, website: str = None):
     except Exception:
         pass
 
+    check_cancel(company_id)  # stop before spending any search credits
     # Multi-stage search: Run contact search and CSR info search concurrently to save execution time
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_contact = executor.submit(search_contact_sources, company_name, website)
-        future_csr = executor.submit(search_company_csr_info, company_name, website)
+        future_contact = submit_with_context(executor, search_contact_sources, company_name, website)
+        future_csr = submit_with_context(executor, search_company_csr_info, company_name, website)
         
         sources_data = future_contact.result()
         csr_info = future_csr.result()
@@ -139,17 +218,31 @@ def research_company(company_id: str, company_name: str, website: str = None):
 
     print(f"[ResearchAgent] Gathered {len(sources)} sources for {company_name}")
 
+    check_cancel(company_id)  # stop before the main extraction LLM call
     research, llm_error = extract_research_with_contact(company_name, sources)
 
     # Dedicated education pass. Keep its audit evidence outside research_json,
     # and preserve an already verified value if a later run is sparse or fails.
     education_evidence = {}
     education_error = None
+    education_search = {}
+    gap_fill_report = None
+    check_cancel(company_id)  # stop before the education search + extraction pass
     try:
         education_search = search_education_fields(company_name, website)
         education_evidence, education_error = extract_education_fields(
             company_name, education_search
         )
+        # Agentic gap-fill: an LLM plans new searches for education fields the fixed
+        # keyword queries found nothing for. GAP_FILL_ENABLED=false in .env turns it off.
+        if not education_error and os.getenv("GAP_FILL_ENABLED", "true").lower().strip() != "false":
+            try:
+                education_evidence, gap_fill_report = _run_education_gap_fill(
+                    company_id, company_name, education_search, education_evidence
+                )
+            except Exception as exc:
+                gap_fill_report = {"error": str(exc)}
+                print(f"[GapFill Warning] Education gap-fill failed for {company_name}: {exc}")
         if not education_error:
             previous = get_company(company_id) or {}
             previous_research = previous.get("research_json") or {}
@@ -164,16 +257,31 @@ def research_company(company_id: str, company_name: str, website: str = None):
             )
             missing_values = {"", "not found", "not publicly available", "none", "n/a", "na"}
             for field in education_fields:
-                new_value = education_evidence.get(field, {}).get("value", "Not Found")
-                old_value = previous_research.get(field, merged.get(field, "Not Found"))
-                new_status = education_evidence.get(field, {}).get("status")
-                if new_status == "found" or (
-                    new_status == "exhausted"
-                    and str(old_value).strip().lower() in missing_values
-                ):
+                field_ev = education_evidence.get(field, {})
+                new_value = field_ev.get("value", "Not Found")
+                new_status = field_ev.get("status")
+                # A value verified in an EARLIER run (source-backed) - safe to keep
+                # if this run can't verify. This is NOT the same as the current
+                # main-extraction guess, which we deliberately do not trust here.
+                prev_value = previous_research.get(field, "Not Found")
+                prev_verified = str(prev_value).strip().lower() not in missing_values
+                # The main extraction's value for this field - may be an unsourced
+                # guess (e.g. STEM "Yes" with no evidence), so only used as a last
+                # resort when the evidence search itself failed to run.
+                guess_value = merged.get(field, "Not Found")
+
+                if new_status == "found":
+                    # Evidence pass reached a source-grounded Yes/No -> authoritative.
                     merged[field] = new_value
+                elif new_status == "search_failed":
+                    # Couldn't search (API/network) -> can't disprove; keep a prior
+                    # verified value, else fall back to the main-extraction value.
+                    merged[field] = prev_value if prev_verified else guess_value
                 else:
-                    merged[field] = old_value
+                    # "exhausted": the evidence pass searched and found NOTHING. Do
+                    # not keep an unsourced guess - downgrade to Not Found, unless a
+                    # previous run had already verified this field.
+                    merged[field] = prev_value if prev_verified else "Not Found"
             research = CompanyResearch(**merged)
     except Exception as exc:
         education_error = {"type": "education_search_failed", "message": str(exc)}
@@ -185,6 +293,7 @@ def research_company(company_id: str, company_name: str, website: str = None):
     # priority-geography scoring override (scoring_agent.py) with nothing to match.
     missing_geo_values = {"", "not found", "not publicly available", "none", "n/a", "na"}
     if (research.program_district_state or "").strip().lower() in missing_geo_values:
+        check_cancel(company_id)  # stop before the geography fallback search + extraction
         try:
             geo_search = search_company_geography(company_name, website)
             geo_fields, geo_error = extract_geography_fields(company_name, geo_search.get("sources", []))
@@ -200,6 +309,22 @@ def research_company(company_id: str, company_name: str, website: str = None):
 
     source_urls = "; ".join([s["url"] for s in sources[:5] if s.get("url")])
 
+    # Full, de-duplicated list of every source link the research pass actually
+    # used, each tagged with its category (source_type). Unlike source_urls above
+    # (top-5, joined string, category dropped), this keeps ALL links + category so
+    # the company detail page can show them grouped by category.
+    all_sources = []
+    _seen_source_urls = set()
+    for s in sources:
+        u = (s.get("url") or "").strip()
+        if not u or u in _seen_source_urls:
+            continue
+        _seen_source_urls.add(u)
+        all_sources.append({"url": u, "category": s.get("source_type") or "Other"})
+    # NOTE: education pass links are intentionally NOT added here - they are shown
+    # per-field inside the "Education Fitment Research" card (via education_evidence
+    # checked_sources), not in this general Data Sources list.
+
     # Save to MongoDB. Agar LLM extraction API hi fail hui thi (sources mile the,
     # par unhe parse nahi kar paye), to "researched" ke saath last_error bhi save
     # karte hain - taaki sparse/"Not Found" fields ka asli reason pata chale.
@@ -208,6 +333,8 @@ def research_company(company_id: str, company_name: str, website: str = None):
         "status": "researched",
         "education_fitment_evidence": education_evidence,
         "education_fitment_error": education_error,
+        "all_sources": all_sources,
+        "gap_fill_report": gap_fill_report,
     }
     if llm_error:
         update_fields["last_error"] = llm_error
@@ -407,23 +534,25 @@ def research_company_with_financials(company_id: str, company_name: str, website
             # the PDF text has no links, so this is a separate search per name. Name-only
             # matching is fuzzy (common names can return the wrong profile), so this is
             # NOT a verified identity match - just a starting point for manual outreach.
-            committee_members = (csr_data or {}).get("committee_members") or []
-            if committee_members:
-                print(f"[Step 5b] {len(committee_members)} CSR Committee Member(s) ke LinkedIn profiles dhundh rahe hain...")
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    futures = {
-                        executor.submit(search_person_linkedin, member, company_name): member
-                        for member in committee_members
-                    }
-                    for future in futures:
-                        member = futures[future]
-                        try:
-                            committee_members_linkedin[member] = future.result()
-                        except Exception as e:
-                            print(f"[⚠️] LinkedIn lookup failed for {member}: {e}")
-                            committee_members_linkedin[member] = None
-                found_count = sum(1 for v in committee_members_linkedin.values() if v)
-                print(f"[✅] {found_count}/{len(committee_members)} committee member LinkedIn profiles found (unverified matches)")
+            # [DISABLED to save 1 search credit per committee member - committee member
+            # names are still saved from csr_data; committee_members_linkedin stays empty]
+            # committee_members = (csr_data or {}).get("committee_members") or []
+            # if committee_members:
+            #     print(f"[Step 5b] {len(committee_members)} CSR Committee Member(s) ke LinkedIn profiles dhundh rahe hain...")
+            #     with ThreadPoolExecutor(max_workers=2) as executor:
+            #         futures = {
+            #             executor.submit(search_person_linkedin, member, company_name): member
+            #             for member in committee_members
+            #         }
+            #         for future in futures:
+            #             member = futures[future]
+            #             try:
+            #                 committee_members_linkedin[member] = future.result()
+            #             except Exception as e:
+            #                 print(f"[⚠️] LinkedIn lookup failed for {member}: {e}")
+            #                 committee_members_linkedin[member] = None
+            #     found_count = sum(1 for v in committee_members_linkedin.values() if v)
+            #     print(f"[✅] {found_count}/{len(committee_members)} committee member LinkedIn profiles found (unverified matches)")
         else:
             print(f"[⚠️] Saare candidate sources se PDF extract nahi ho saka, CSR data skip ho raha hai")
     else:

@@ -25,6 +25,7 @@ scratch/
 *.xlsx
 *.csv
 *_SUMMARY.txt
+debug_reports/
 
 
 # Local docs, screenshots & design drafts (optional local files)

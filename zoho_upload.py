@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from audit_logger import log_action
 from crm_mapper import map_to_zoho_lead
 from db import get_company, update_company, get_user_zoho_keys
+from redis_cache import get_json, set_json, make_key
 
 load_dotenv()
 
@@ -62,6 +63,57 @@ def get_access_token(user_zoho_keys: dict = None) -> tuple:
     return None, api_domain
 
 
+def _fetch_zoho_users_by_email(access_token: str, api_domain: str) -> dict:
+    """Fetch all active Zoho users and return {email_lowercase: user_id}.
+    Cached for an hour (the org's user list rarely changes) so a lookup isn't
+    a full extra API call on every single upload."""
+    cache_key = make_key("zoho_users", api_domain)
+    cached = get_json(cache_key)
+    if cached is not None:
+        return cached
+
+    headers = {"Authorization": f"Zoho-oauthtoken {access_token}"}
+    users_by_email = {}
+    try:
+        response = requests.get(
+            f"{api_domain}/crm/v6/users",
+            headers=headers,
+            params={"type": "ActiveUsers"},
+            timeout=15,
+        )
+        if response.status_code == 200:
+            for u in response.json().get("users", []):
+                email = (u.get("email") or "").strip().lower()
+                if email and u.get("id"):
+                    users_by_email[email] = u["id"]
+    except (requests.RequestException, ValueError) as error:
+        print(f"[Zoho] Failed to fetch users for Owner lookup: {error}")
+
+    set_json(cache_key, users_by_email, ttl_seconds=3600)
+    return users_by_email
+
+
+def get_zoho_owner_id(username: str, access_token: str, api_domain: str) -> str:
+    """Resolve an app username to a Zoho user id for the Owner field, by
+    matching it against Zoho users' login emails - either the full email
+    (recommended: make app usernames the same as the person's Zoho login
+    email) or just the local part before '@' (so a short username like
+    "preet" still matches "preet@company.com"). Returns None on no match,
+    so Owner is left unset rather than sent as an invalid value - Zoho
+    rejects the WHOLE Lead if Owner isn't a real numeric user id (confirmed
+    live)."""
+    if not username or not access_token:
+        return None
+    users_by_email = _fetch_zoho_users_by_email(access_token, api_domain)
+    username_lower = username.strip().lower()
+    if username_lower in users_by_email:
+        return users_by_email[username_lower]
+    for email, uid in users_by_email.items():
+        if email.split("@")[0] == username_lower:
+            return uid
+    return None
+
+
 def upload_company_to_zoho(company_id: str, username: str = None) -> dict:
     """Upload an eligible company as a record in Zoho CRM's Leads module."""
     company = get_company(company_id, username=username) if username else get_company(company_id)
@@ -74,6 +126,14 @@ def upload_company_to_zoho(company_id: str, username: str = None) -> dict:
     user_zoho_keys = get_user_zoho_keys(username) if username else {}
     lead_payload = map_to_zoho_lead(company)
     access_token, target_api_domain = get_access_token(user_zoho_keys)
+
+    if access_token:
+        owner_username = (company.get("crm") or {}).get("lead_owner") or company.get("created_by")
+        owner_id = get_zoho_owner_id(owner_username, access_token, target_api_domain)
+        if owner_id:
+            lead_payload["Owner"] = {"id": owner_id}
+        elif owner_username:
+            print(f"[Zoho] No Zoho user found matching username '{owner_username}' - Owner left unset.")
 
     if not access_token:
         print(f"[Zoho Simulation] Uploading Lead for user '{username}': {json.dumps(lead_payload, indent=2)}")

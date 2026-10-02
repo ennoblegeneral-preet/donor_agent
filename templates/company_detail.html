@@ -16,6 +16,23 @@
 </a>
 <p class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider mb-1">{{ research.get('industry',
     'Sector unknown') }}</p>
+<div class="flex items-center gap-2 mt-1">
+    <label for="companyTypeSelect"
+        class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Type:</label>
+    <select id="companyTypeSelect" data-id="{{ c.id_str }}" onchange="saveCompanyType(this)"
+        class="bg-[#0F1117] border border-[#2E3245] rounded-lg px-2 py-1 font-body-sm text-body-sm text-on-surface focus:outline-none focus:border-primary">
+        {% set current_type = c.get('company_type', 'CSR/Corporates') %}
+        <option value="CSR/Corporates" {% if current_type=='CSR/Corporates' %}selected{% endif %}>CSR / Corporates
+        </option>
+        <option value="Institutional Donors" {% if current_type=='Institutional Donors' %}selected{% endif %}>
+            Institutional Donors</option>
+        <option value="FCRA" {% if current_type=='FCRA' %}selected{% endif %}>FCRA</option>
+        <option value="HNIs" {% if current_type=='HNIs' %}selected{% endif %}>HNIs</option>
+        <option value="Family Foundations" {% if current_type=='Family Foundations' %}selected{% endif %}>Family
+            Foundations</option>
+    </select>
+    <span id="companyTypeSaveStatus" class="font-body-sm text-body-sm text-on-surface-variant"></span>
+</div>
 {% endblock %}
 {% block page_title %}{{ c.company_name }}{% endblock %}
 {% block page_subtitle %}{% if c.website %}<a href="{{ c.website }}" target="_blank"
@@ -158,9 +175,10 @@
                 <strong>Annual CSR Spend:</strong>
                 <span>
                     {% if csr_data.get('csr_spend') is not none %}
-                        ₹{{ csr_data.get('csr_spend') | commas }} Cr{% if csr_data.get('csr_spend_year') %} ({{ csr_data.get('csr_spend_year') }}){% endif %}
+                    ₹{{ csr_data.get('csr_spend') | commas }} Cr{% if csr_data.get('csr_spend_year') %} ({{
+                    csr_data.get('csr_spend_year') }}){% endif %}
                     {% else %}
-                        {{ research.get('csr_spend_previous_fy', '-') if research else '-' }}
+                    {{ research.get('csr_spend_previous_fy', '-') if research else '-' }}
                     {% endif %}
                 </span>
             </div>
@@ -168,9 +186,9 @@
                 <strong>CSR Unspent Amount:</strong>
                 <span>
                     {% if csr_data.get('csr_unspent_amount') is not none %}
-                        ₹{{ csr_data.get('csr_unspent_amount') | commas }} Cr
+                    ₹{{ csr_data.get('csr_unspent_amount') | commas }} Cr
                     {% else %}
-                        -
+                    -
                     {% endif %}
                 </span>
             </div>
@@ -180,8 +198,10 @@
                 <strong>Implementation Partners (NGOs):</strong>
                 <span>{{ (partners_list | join(', ')) or '-' }}</span>
             </div>
-            {% set comm_list = (csr_data.get('committee_members') if csr_data else []) or (c.get('committee_members') or []) %}
-            {% set committee_linkedin = c.get('committee_members_linkedin') or (c.get('csr_data') or {}).get('committee_members_linkedin') or {} %}
+            {% set comm_list = (csr_data.get('committee_members') if csr_data else []) or (c.get('committee_members') or
+            []) %}
+            {% set committee_linkedin = c.get('committee_members_linkedin') or (c.get('csr_data') or
+            {}).get('committee_members_linkedin') or {} %}
             {% set committee_linkedin_lookup = c.get('_committee_members_linkedin_lookup') or {} %}
             <div class="detail-field">
                 <strong>CSR Committee Members:</strong>
@@ -191,7 +211,8 @@
                     {% set li_url = committee_linkedin_lookup.get(member|string|trim|lower) %}
                     {% if li_url %}
                     <a href="{{ li_url }}" target="_blank" rel="noopener noreferrer" class="source-link"
-                        style="display:inline-flex; align-items:center; gap:2px;">{{ member }} 🔗</a>{% if not loop.last %}, {% endif %}
+                        style="display:inline-flex; align-items:center; gap:2px;">{{ member }} 🔗</a>{% if not loop.last
+                    %}, {% endif %}
                     {% else %}
                     {{ member }}{% if not loop.last %}, {% endif %}
                     {% endif %}
@@ -201,28 +222,39 @@
                     {% endif %}
                 </span>
             </div>
-            <div class="detail-field full-width">
-                <strong>Source URL:</strong>
-                {% set source_urls = (research.get('source_url', '') if research else '').split(';') %}
-                {% set valid_urls = [] %}
-                {% for u in source_urls %}
-                {% set u = u.strip() %}
-                {% if u and u != 'Not Found' and 'http' in u %}
-                {% set _ = valid_urls.append(u) %}
-                {% endif %}
-                {% endfor %}
-                {% if valid_urls %}
-                {% for u in valid_urls %}
-                <a href="{{ u }}" target="_blank" class="source-link">{{ u | source_name }}</a>{% if not loop.last
-                %}<span> · </span>{% endif %}
-                {% endfor %}
-                {% else %}
-                <span>-</span>
-                {% endif %}
-            </div>
         </div>
     </div>
 </div>
+
+<!-- All Data Sources scraped by the research agent, grouped by category -->
+{% set all_sources = c.get('all_sources') or [] %}
+{% if all_sources %}
+<div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
+    <h2 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Data Sources
+        <span class="font-body-sm text-body-sm text-on-surface-variant" style="font-weight:400;">({{ all_sources|length
+            }} links)</span>
+    </h2>
+    <p class="font-body-sm text-body-sm text-on-surface-variant" style="margin-bottom: 16px;">
+        Every web source the research agent scraped for this company, grouped by category.
+    </p>
+    <div style="display:flex; flex-direction:column; gap:1rem;">
+        {% for category, items in all_sources|groupby('category') %}
+        <div style="padding:12px; border:1px solid rgba(255,255,255,0.10); border-radius:8px;">
+            <div class="font-label-md text-label-md text-on-surface font-semibold" style="margin-bottom:8px;">
+                {{ category }}
+                <span style="color:#94a3b8; font-weight:400;">({{ items|list|length }})</span>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                {% for s in items %}
+                <a href="{{ s.url }}" target="_blank" rel="noopener noreferrer" class="source-link"
+                    style="font-size:12px;">{{ s.url | source_name }} ↗</a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 
 <!-- Dedicated Education Fitment Research -->
 {% set education_evidence = c.get('education_fitment_evidence') or {} %}
@@ -254,35 +286,51 @@
                 Status: {{ display_status }} · {{ evidence.get('sources_checked', 0) }} sources checked
             </div>
             {% endif %}
+            {% if evidence.get('filled_by_agent') %}
+            <div style="margin-top: 5px; font-size: 11px; color: #c4b5fd;"
+                title="{{ (evidence.get('agent_queries') or []) | join(' | ') }}">
+                Found by AI agent
+            </div>
+            {% endif %}
             {% if evidence.get('evidence') %}
             <div style="margin-top: 7px; font-size: 12px; color: #cbd5e1;">{{ evidence.get('evidence') }}</div>
             {% endif %}
-            {% if evidence.get('sources') %}
-            <div style="margin-top: 7px; font-size: 11px;">
-                <span style="color:#94a3b8; margin-right:6px;">Supporting sources:</span>
-                {% for source in evidence.get('sources') %}
-                {% if source is string %}
-                {% set source_url = source %}
-                {% set source_label = source | source_name %}
-                {% else %}
-                {% set source_url = source.get('url') %}
-                {% set source_label = source.get('title') or (source_url | source_name) %}
-                {% endif %}
-                <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer" class="source-link">{{ source_label
-                    }}</a>{% if not loop.last %} · {% endif %}
-                {% endfor %}
+            {# Evidence sources = the specific links the Yes/No value was actually
+            derived from (verifier's cited source_indexes). checked_sources =
+            every link the field search scraped, shown separately so it's clear
+            which links back the value vs which were merely looked at. #}
+            {% set evidence_sources = evidence.get('sources') or [] %}
+            {% set checked_sources = evidence.get('checked_sources') or [] %}
+            {% if evidence_sources %}
+            <div style="margin-top: 8px;">
+                <div style="color:#4ade80; font-size:11px; margin-bottom:4px;">Evidence source{{ 's' if
+                    evidence_sources|length > 1 else '' }} (basis for this value):</div>
+                <div style="display:flex; flex-direction:column; gap:3px;">
+                    {% for source in evidence_sources %}
+                    {% if source.get('url') %}
+                    <a href="{{ source.get('url') }}" target="_blank" rel="noopener noreferrer" class="source-link"
+                        style="font-size:11px;" title="{{ source.get('url') }}">{{ source.get('title') or
+                        (source.get('url') | source_name) }} ↗</a>
+                    {% endif %}
+                    {% endfor %}
+                </div>
             </div>
-            {% elif evidence.get('checked_sources') %}
-            <div style="margin-top: 7px; font-size: 11px;">
-                <span style="color:#94a3b8; margin-right:6px;">Sources checked:</span>
-                {% for source in evidence.get('checked_sources') %}
-                {% set source_url = source.get('url') if source is mapping else source %}
-                {% set source_label = (source.get('title') or (source_url | source_name)) if source is mapping else
-                (source | source_name) %}
-                <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer" class="source-link">{{ source_label
-                    }}</a>{% if not loop.last %} · {% endif %}
-                {% endfor %}
-                <div style="margin-top:4px; color:#94a3b8;">The extractor did not identify a specific supporting source.
+            {% endif %}
+            {% if checked_sources %}
+            <div style="margin-top: 8px;">
+                <div style="color:#94a3b8; font-size:11px; margin-bottom:4px;">All links checked ({{
+                    checked_sources|length }}):</div>
+                <div
+                    style="max-height:96px; overflow-y:auto; display:flex; flex-direction:column; gap:3px; padding-right:6px;">
+                    {% for source in checked_sources %}
+                    {% set source_url = source.get('url') if source is mapping else source %}
+                    {% set source_label = (source.get('title') or (source_url | source_name)) if source is mapping else
+                    (source | source_name) %}
+                    {% if source_url %}
+                    <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer" class="source-link"
+                        style="font-size:11px;" title="{{ source_url }}">{{ source_label }} ↗</a>
+                    {% endif %}
+                    {% endfor %}
                 </div>
             </div>
             {% endif %}
@@ -294,6 +342,13 @@
 <!-- Financial Data -->
 {% set financial_data = c.get('financial_data') or {} %}
 {% set csr_data = c.get('csr_data') or {} %}
+{# CSR figures annual report se aate hain - unke saath source PDF page ka link dikhate hain.
+csr_report_link = wahi PDF jisse CSR data extract hua (fallback: general annual report). #}
+{% set csr_source_pages = csr_data.get('source_pages') or {} %}
+{% set csr_report_link = c.get('csr_report_url') or c.get('annual_report_url') %}
+{% macro page_cite(page, url) %}{% if page and url %}<a href="{{ url }}#page={{ page }}" target="_blank"
+    rel="noopener noreferrer" class="source-link" style="font-size:10px; margin-left:6px; white-space:nowrap;"
+    title="Source: annual report PDF page {{ page }}">📄 p.{{ page }}</a>{% endif %}{% endmacro %}
 {% if (financial_data and (financial_data.get('turnover') or financial_data.get('pbt'))) or csr_data %}
 <div class="glass-panel rounded-xl p-stack-lg mb-stack-lg">
     <div
@@ -370,7 +425,7 @@
                 Annual CSR Spend (₹ Cr){% if csr_data.get('csr_spend_year') %} &middot; {{
                 csr_data.get('csr_spend_year') }}{% endif %}</div>
             <div style="font-weight: 600; color: #f1f5f9; font-size: 14px;">{{ csr_data.get('csr_spend', '-') | commas
-                }}</div>
+                }}{{ page_cite(csr_source_pages.get('csr_spend'), csr_report_link) }}</div>
         </div>
         <div
             style="background: rgba(239, 68, 68, 0.1); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.2);">
@@ -378,7 +433,7 @@
                 style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;">
                 CSR Unspent Amount (₹ Cr)</div>
             <div style="font-weight: 600; color: #f1f5f9; font-size: 14px;">{{ csr_data.get('csr_unspent_amount', '-') |
-                commas }}</div>
+                commas }}{{ page_cite(csr_source_pages.get('csr_unspent_amount'), csr_report_link) }}</div>
         </div>
     </div>
 
@@ -392,7 +447,8 @@
             <div
                 style="background: rgba(148,163,184,0.08); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15); text-align:center;">
                 <div style="font-size: 11px; color: #94a3b8;">{{ fy }}</div>
-                <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹{{ amount | commas }} Cr</div>
+                <div style="font-weight: 600; color: #f1f5f9; font-size: 13px;">₹{{ amount | commas }} Cr{{
+                    page_cite((csr_source_pages.get('csr_spend_history') or {}).get(fy), csr_report_link) }}</div>
             </div>
             {% endfor %}
         </div>
@@ -401,7 +457,8 @@
 
     {% if c.get('screener_url') %}
     <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);">
-        <button class="action-btn" onclick="loadCsrHistoryYears('{{ c.id_str }}')">📜 View Previous Years' CSR Spend</button>
+        <button class="action-btn" onclick="loadCsrHistoryYears('{{ c.id_str }}')">📜 View Previous Years' CSR
+            Spend</button>
         <div id="csrHistoryYears-{{ c.id_str }}" style="display:none; margin-top: 12px;"></div>
     </div>
     {% endif %}
@@ -565,7 +622,7 @@
                 style="background: rgba(56, 189, 248, 0.1); padding: 8px 12px; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.25);">
                 <span style="font-size: 12px; color: #94a3b8;">Education Spend:</span>
                 <strong style="color:#38bdf8; margin-left:6px;">₹{{ education_spend.get('current_education_spend') |
-                    commas }}</strong>
+                    commas }}</strong>{{ page_cite(csr_source_pages.get('education_spend'), csr_report_link) }}
             </div>
             {% endif %}
             {% if education_spend.get('current_education_percentage') is not none %}
@@ -588,7 +645,8 @@
                 style="background: rgba(148,163,184,0.08); padding: 10px; border-radius: 6px; border: 1px solid rgba(148,163,184,0.15);">
                 <div style="font-size: 11px; color: #94a3b8; margin-bottom: 4px;">{{ fy }}</div>
                 <div style="font-size: 12px; color: #f1f5f9;">Education: <strong>₹{{ row.get('education_spend', '-') |
-                        commas }}</strong></div>
+                        commas }}</strong>{{ page_cite((csr_source_pages.get('education_spend_history') or {}).get(fy),
+                    csr_report_link) }}</div>
                 <div style="font-size: 12px; color: #cbd5e1;">Total CSR: ₹{{ row.get('total_csr_spend', '-') | commas }}
                 </div>
                 {% if row.get('education_percentage') is not none %}
@@ -932,6 +990,8 @@
         <button class="action-btn gpt-table-btn"
             style="background: linear-gradient(135deg, #a855f7, #7e22ce); color: #fff; box-shadow: 0 4px 14px rgba(168, 85, 247, 0.4);"
             onclick="copyGptTable('{{ c.id_str }}', '{{ c.company_name }}')">📋 Copy GPT Table Row</button>
+        <button class="action-btn outreach-btn brief-btn" id="brief-btn-{{ c.id_str }}"
+            onclick="generateBrief('{{ c.id_str }}')">📋 Meeting Brief</button>
     </div>
 
     {% if c.approval_status == 'approved' %}
@@ -944,8 +1004,6 @@
                 onclick="checkWarmConnect('{{ c.id_str }}')">🔗 Check Warm Connect</button>
             <button class="action-btn outreach-btn draft-msg-btn" id="draft-btn-{{ c.id_str }}"
                 onclick="draftMessage('{{ c.id_str }}')">✍️ Draft Message</button>
-            <button class="action-btn outreach-btn brief-btn" id="brief-btn-{{ c.id_str }}"
-                onclick="generateBrief('{{ c.id_str }}')">📋 Meeting Brief</button>
         </div>
 
         {% if c.get('warm_connect') %}
@@ -973,39 +1031,39 @@
                 style="margin-top:8px; font-size:13px; line-height:1.6;">{{ c.drafted_message.get('body', '') }}</textarea>
         </div>
         {% endif %}
+    </div>
+    {% endif %}
 
-        {% if c.get('meeting_brief') %}
-        <div class="detail-field full-width" style="margin-top: 14px;">
-            <strong>📋 Meeting Brief:</strong>
-            <div class="meeting-brief-box" style="margin-top:8px;">
-                {% if c.meeting_brief.get('company_snapshot') %}
-                <div class="brief-section"><span class="brief-label">Company Snapshot</span>
-                    <p>{{ c.meeting_brief.get('company_snapshot') }}</p>
-                </div>
-                {% endif %}
-                {% if c.meeting_brief.get('csr_priorities') %}
-                <div class="brief-section"><span class="brief-label">CSR Priorities</span>
-                    <p>{{ c.meeting_brief.get('csr_priorities') }}</p>
-                </div>
-                {% endif %}
-                {% if c.meeting_brief.get('ennoble_pitch_angle') %}
-                <div class="brief-section"><span class="brief-label">Pitch Angle</span>
-                    <p>{{ c.meeting_brief.get('ennoble_pitch_angle') }}</p>
-                </div>
-                {% endif %}
-                {% if c.meeting_brief.get('key_talking_points') %}
-                <div class="brief-section">
-                    <span class="brief-label">Key Talking Points</span>
-                    <ul>{% for pt in c.meeting_brief.get('key_talking_points', []) %}<li>{{ pt }}</li>{% endfor %}</ul>
-                </div>
-                {% endif %}
-                {% if c.meeting_brief.get('generated_at') %}
-                <div style="margin-top:10px; font-size:11px; color:#475569;">Generated: {{
-                    c.meeting_brief.get('generated_at')[:19] | replace('T',' ') }} UTC</div>
-                {% endif %}
+    {% if c.get('meeting_brief') %}
+    <div class="detail-field full-width" style="margin-top: 14px;">
+        <strong>📋 Meeting Brief:</strong>
+        <div class="meeting-brief-box" style="margin-top:8px;">
+            {% if c.meeting_brief.get('company_snapshot') %}
+            <div class="brief-section"><span class="brief-label">Company Snapshot</span>
+                <p>{{ c.meeting_brief.get('company_snapshot') }}</p>
             </div>
+            {% endif %}
+            {% if c.meeting_brief.get('csr_priorities') %}
+            <div class="brief-section"><span class="brief-label">CSR Priorities</span>
+                <p>{{ c.meeting_brief.get('csr_priorities') }}</p>
+            </div>
+            {% endif %}
+            {% if c.meeting_brief.get('ennoble_pitch_angle') %}
+            <div class="brief-section"><span class="brief-label">Pitch Angle</span>
+                <p>{{ c.meeting_brief.get('ennoble_pitch_angle') }}</p>
+            </div>
+            {% endif %}
+            {% if c.meeting_brief.get('key_talking_points') %}
+            <div class="brief-section">
+                <span class="brief-label">Key Talking Points</span>
+                <ul>{% for pt in c.meeting_brief.get('key_talking_points', []) %}<li>{{ pt }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            {% if c.meeting_brief.get('generated_at') %}
+            <div style="margin-top:10px; font-size:11px; color:#475569;">Generated: {{
+                c.meeting_brief.get('generated_at')[:19] | replace('T',' ') }} UTC</div>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
     {% endif %}
 </div>
@@ -1037,6 +1095,18 @@
 {% block extra_scripts %}
 <script>
     const COMPANY_ID = "{{ c.id_str }}";
+
+    function saveCompanyType(selectEl) {
+        const companyId = selectEl.dataset.id;
+        const statusEl = document.getElementById('companyTypeSaveStatus');
+        if (statusEl) statusEl.textContent = 'Saving…';
+        const formData = new FormData();
+        formData.append('company_type', selectEl.value);
+        fetch(`/update-crm-fields/${companyId}`, { method: 'POST', body: formData })
+            .then(r => r.json())
+            .then(data => { if (statusEl) statusEl.textContent = data.status === 'updated' ? 'Saved ✓' : (data.message || 'Could not save'); })
+            .catch(() => { if (statusEl) statusEl.textContent = 'Error saving'; });
+    }
 
     function updateLeadOwner(companyId, owner) {
         const formData = new FormData();

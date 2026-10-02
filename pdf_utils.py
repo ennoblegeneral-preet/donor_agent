@@ -155,7 +155,9 @@ def extract_csr_section_text(pdf_url: str, max_chars: int = 50000) -> str:
     the total CSR spend extracted fine - the LLM had no way to tell which
     number belonged to which sector.
     """
-    cache_key = make_key("csr-pdf", pdf_url, max_chars)
+    # "-v2": page markers add karne ke baad cache bump - purane markerless
+    # cached texts ko invalidate karta hai taaki page-number sourcing kaam kare.
+    cache_key = make_key("csr-pdf-v2", pdf_url, max_chars)
     cached = get_json(cache_key)
     if isinstance(cached, dict) and isinstance(cached.get("text"), str):
         print(f"[PDF Cache] Hit: {pdf_url}")
@@ -216,11 +218,19 @@ def extract_csr_section_text(pdf_url: str, max_chars: int = 50000) -> str:
         # so sector-wise amounts keep their row/column alignment.
         tables_by_page = _tables_markdown_for_pages(pdf_bytes, {idx for idx, _ in strong_pages})
 
+        # Har page ke text se pehle ek "PDF PAGE n" marker lagate hain (n = 1-based
+        # physical page). Isse LLM (extract_csr_data) har figure ke saath uska
+        # source page number bata sakta hai. Note: ye PDF ka physical page hai,
+        # report par chhapa hua page number nahi (cover/blank pages ki wajah se
+        # thoda alag ho sakta hai) - #page=n link isi physical page par khulta hai.
+        def _mark(idx, body):
+            return f"===== PDF PAGE {idx + 1} =====\n{body}"
+
         strong_texts = [
-            (f"{tables_by_page[idx]}\n\n{text}" if idx in tables_by_page else text)
+            _mark(idx, f"{tables_by_page[idx]}\n\n{text}" if idx in tables_by_page else text)
             for idx, text in strong_pages
         ]
-        weak_texts = [text for _, text in weak_pages]
+        weak_texts = [_mark(idx, text) for idx, text in weak_pages]
 
         combined = "\n".join(strong_texts + weak_texts)
         result_text = combined[:max_chars]

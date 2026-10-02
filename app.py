@@ -8,7 +8,7 @@ import os
 import threading
 import uuid
 from urllib.parse import urlparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
@@ -16,7 +16,8 @@ from db import (
     get_all_companies, get_company, update_company, create_company, delete_company, delete_companies,
     create_user, get_user_by_username, get_user_by_id, get_all_users, update_user,
     get_user_zoho_keys, update_user_zoho_keys,
-    get_user_search_keys, update_user_search_keys, get_employee_stats
+    get_user_search_keys, update_user_search_keys, get_employee_stats,
+    COMPANY_CATEGORIES, DEFAULT_COMPANY_CATEGORY
 )
 from search_tool import set_search_context, get_effective_search_config, start_search_tracking, get_tracked_search_usage
 from auth import hash_password, verify_password, generate_random_password, login_required, admin_required
@@ -25,6 +26,7 @@ from compliance_agent import check_compliance
 from scoring_agent import score_company
 # from contact_discovery_agent import find_decision_makers_apollo  # Apollo disabled
 from audit_logger import log_action
+from cancellation import request_cancel, clear as clear_cancel, check as check_cancel, PipelineCancelled
 from pdf_service import generate_research_pdf, generate_research_filename
 # from email_service import send_research_pdf
 from email_service import send_research_excel, send_combined_research_excel
@@ -117,6 +119,10 @@ zoho_bulk_jobs = {}
 zoho_bulk_jobs_lock = threading.Lock()
 MAX_ZOHO_BULK = 50
 
+# Lead Generation: per-category extraction jobs, guarded by one lock. The job
+# dict (lead_gen_jobs) and category config live near the routes below.
+lead_gen_lock = threading.Lock()
+
 # Caps how many companies' pipelines actually run (i.e. fire search/LLM calls) at
 # once, regardless of how many were queued via bulk CSV upload. Each pipeline
 # thread still starts immediately so progress tracking/UX is unaffected, but
@@ -124,7 +130,7 @@ MAX_ZOHO_BULK = 50
 # N companies fires N companies' worth of concurrent Tavily searches at once,
 # which blows through Tavily's rate limit even with the per-call semaphore in
 # search_tool.py (that one only caps instantaneous concurrency, not sustained rate).
-_pipeline_concurrency = threading.Semaphore(4)
+_pipeline_concurrency = threading.Semaphore(8)
 
 
 
@@ -150,6 +156,7 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
     user_search_keys = get_user_search_keys(username) if username else {}
     set_search_context(user_search_keys)
     try:
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "research", "Researching public company and CSR information.", percent=20)
         research = research_company(company_id, company_name, website)
         if not research:
@@ -159,18 +166,21 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
             set_pipeline_progress(company_id, "research", message, "error", 100)
             return
 
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "financials", "Pulling turnover/PBT from Screener and calculating CSR budget.", percent=35)
         try:
             research_company_with_financials(company_id, company_name, website)
         except Exception as fin_error:
             print(f"[Pipeline Warning] Financial research failed for {company_name}: {fin_error}")
 
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "compliance", "Checking eligibility and compliance signals.", percent=50)
         compliance = check_compliance(company_id, research)
         if compliance.get("blocked"):
             set_pipeline_progress(company_id, "complete", "Pipeline finished: this company was blocked by compliance checks.", "complete", 100)
             return
 
+        check_cancel(company_id)
         set_pipeline_progress(company_id, "scoring", "Running fit-check and partnership assessment.", percent=75)
         score_result = score_company(company_id)
 
@@ -197,6 +207,15 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
             complete_message = "Pipeline complete. The lead is ready for review."
 
         set_pipeline_progress(company_id, "complete", complete_message, "complete", 100)
+    except PipelineCancelled:
+        stop_msg = "Search stopped by you before completion. No further steps were run."
+        print(f"[Pipeline Cancelled] {company_name}: stopped by user.")
+        update_company(company_id, {
+            "status": "failed_research",
+            "last_error": {"type": "cancelled", "message": stop_msg},
+        })
+        set_pipeline_progress(company_id, "cancelled", stop_msg, "cancelled", 100)
+        log_action(company_id, "research_cancelled", "User", details=stop_msg)
     finally:
         usage = get_tracked_usage()
         if usage and usage.get("calls"):
@@ -218,6 +237,7 @@ def _execute_company_pipeline_stages(company_id, company_name, website, username
 
 def run_company_pipeline(company_id, company_name, website, username=None):
     """Run the existing pipeline in the background and enforce strict execution timeout."""
+    clear_cancel(company_id)  # fresh run: drop any stale stop flag from a previous attempt
     start_tracking()
     start_search_tracking()
     user_search_keys = get_user_search_keys(username) if username else {}
@@ -284,6 +304,19 @@ def run_company_pipeline(company_id, company_name, website, username=None):
         _pipeline_concurrency.release()
 
 
+@app.route("/home", methods=["GET"])
+@login_required
+def home():
+    """Post-login landing: choose between Lead Generation and Lead Research."""
+    return render_template(
+        "home.html",
+        role=session.get("role"),
+        username=session.get("username"),
+        active_nav="home",
+        impersonating=session.get("impersonated_by"),
+    )
+
+
 @app.route("/", methods=["GET"])
 @login_required
 def dashboard():
@@ -313,10 +346,21 @@ def dashboard():
     search_cfg = get_effective_search_config(username)
     search_configured = bool(search_cfg.get("configured") and search_cfg.get("api_key"))
 
+    # Searches done today = companies created today, measured in IST (UTC+5:30) so
+    # the count resets at midnight IST. created_at is stored as naive UTC.
+    _IST_OFFSET = timedelta(hours=5, minutes=30)
+    today_ist = (datetime.utcnow() + _IST_OFFSET).date()
+    searches_today = sum(
+        1 for c in companies
+        if isinstance(c.get("created_at"), datetime)
+        and (c["created_at"] + _IST_OFFSET).date() == today_ist
+    )
+
     return render_template(
         "index.html",
         companies=companies,
         count=len(companies),
+        searches_today=searches_today,
         db_error=db_error,
         search_configured=search_configured,
         search_provider=search_cfg.get("provider", "serper"),
@@ -325,6 +369,233 @@ def dashboard():
         active_nav="dashboard",
         impersonating=session.get("impersonated_by"),
     )
+
+
+# Slug -> (company_type stored on the doc, sidebar label, nav key, show financial stats on cards)
+CATEGORY_PAGES = {
+    "csr-corporates": ("CSR/Corporates", "CSR / Corporates", "csr_corporates", True),
+    "institutional-donors": ("Institutional Donors", "Institutional Donors", "institutional_donors", False),
+    "fcra": ("FCRA", "FCRA", "fcra", False),
+    "hnis": ("HNIs", "HNIs", "hnis", False),
+    "family-foundations": ("Family Foundations", "Family Foundations", "family_foundations", False),
+}
+
+
+def _render_category_page(slug):
+    company_type, page_label, nav_key, show_financials = CATEGORY_PAGES[slug]
+    try:
+        username = session.get("username")
+        role = session.get("role")
+        all_companies = get_all_companies(username=username, role=role)
+        companies = [c for c in all_companies if c.get("company_type") == company_type]
+        db_error = None
+    except Exception as e:
+        companies = []
+        db_error = "Database Connection Error: Please make sure MongoDB is running on localhost:27017, or configure your MONGODB_URI in your .env file."
+        print(f"[{page_label} Error] Database exception: {e}")
+
+    for c in companies:
+        _prepare_committee_linkedin(c)
+        c["id_str"] = str(c["_id"])
+        if "score" not in c:
+            c["score"] = None
+        if "tier" not in c:
+            c["tier"] = None
+        if "status" not in c:
+            c["status"] = "pending"
+
+    username = session.get("username")
+    user_search_keys = get_user_search_keys(username) if username else {}
+    set_search_context(user_search_keys)
+    search_cfg = get_effective_search_config(username)
+    search_configured = bool(search_cfg.get("configured") and search_cfg.get("api_key"))
+
+    return render_template(
+        "category.html",
+        companies=companies,
+        count=len(companies),
+        db_error=db_error,
+        search_configured=search_configured,
+        search_provider=search_cfg.get("provider", "serper"),
+        role=session.get("role"),
+        username=username,
+        active_nav=nav_key,
+        page_label=page_label,
+        company_type=company_type,
+        show_financials=show_financials,
+        impersonating=session.get("impersonated_by"),
+    )
+
+
+for _slug in CATEGORY_PAGES:
+    app.add_url_rule(
+        f"/{_slug}",
+        endpoint=f"category_{_slug.replace('-', '_')}",
+        view_func=login_required(lambda slug=_slug: _render_category_page(slug)),
+        methods=["GET"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lead Generation: one generator tab per category. CSR/Corporates and Family
+# Foundations have working scrapers; the other three are pending a source.
+# ---------------------------------------------------------------------------
+# slug -> config: label, nav key, status, output file, download name
+LEAD_GEN_CATEGORIES = {
+    "csr-corporates": {
+        "label": "CSR / Corporates", "nav": "gen_csr", "status": "ready",
+        "file": "company_universe.xlsx", "download": "company_universe.xlsx",
+    },
+    "institutional-donors": {
+        "label": "Institutional Donors", "nav": "gen_institutional",
+        "status": "ready", "file": "institutional_donors.xlsx",
+        "download": "institutional_donors.xlsx",
+    },
+    "fcra": {
+        "label": "FCRA", "nav": "gen_fcra", "status": "ready",
+        "file": "fcra_donors.xlsx", "download": "fcra_donors.xlsx",
+    },
+    "hnis": {
+        "label": "HNIs", "nav": "gen_hnis", "status": "ready",
+        "file": "hurun_philanthropists.xlsx", "download": "hurun_philanthropists.xlsx",
+    },
+    "family-foundations": {
+        "label": "Family Foundations", "nav": "gen_family", "status": "ready",
+        "file": "foundations.xlsx", "download": "foundations.xlsx",
+    },
+}
+
+# slug -> live job state
+lead_gen_jobs = {}
+
+
+def _lead_gen_job(slug):
+    with lead_gen_lock:
+        return dict(lead_gen_jobs.get(slug, {"state": "idle", "message": "",
+                                             "percent": 0, "stats": None}))
+
+
+def _read_universe_stats(filename):
+    """Generic reader for any generated Excel — returns total, headers, a 25-row
+    preview (rows as lists) and generated_at, or None if the file is absent."""
+    if not filename or not os.path.exists(filename):
+        return None
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(filename, read_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        if not rows:
+            return None
+        headers = [str(h) if h is not None else "" for h in rows[0]]
+        data = rows[1:]
+        preview = [[("" if v is None else v) for v in r] for r in data[:25]]
+        generated_at = datetime.fromtimestamp(
+            os.path.getmtime(filename), tz=timezone.utc
+        ).isoformat()
+        return {"total": len(data), "headers": headers,
+                "preview": preview, "generated_at": generated_at}
+    except Exception as e:
+        print(f"[LeadGen] stats read error: {e}")
+        return None
+
+
+def _run_generation(slug):
+    """Background worker for a category's extraction."""
+    cfg = LEAD_GEN_CATEGORIES[slug]
+
+    def _set(state, message, percent, stats=None):
+        with lead_gen_lock:
+            lead_gen_jobs[slug] = {"state": state, "message": message,
+                                   "percent": percent, "stats": stats}
+
+    try:
+        if slug == "csr-corporates":
+            import extract_company as ec
+            import extract_mca as emca
+            records = []
+            _set("running", "Fetching NSE listed companies…", 15)
+            records += ec.fetch_nse()
+            _set("running", "Fetching BSE listed companies…", 35)
+            records += ec.fetch_bse()
+            _set("running", "Scraping unlisted sources…", 55)
+            records += ec.scrape_sharescart() + ec.scrape_unlistedzone() + ec.scrape_stockify()
+            _set("running", "Fetching MCA Maharashtra registry…", 70)
+            records += emca.pipeline_records()
+            _set("running", "Deduplicating…", 85)
+            merged = ec.dedupe(records)
+            _set("running", "Writing Excel…", 95)
+            ec.write_excel(merged, cfg["file"])
+        elif slug == "family-foundations":
+            import extract_foundation as ef
+            records = []
+            _set("running", "Scraping NGObase foundations…", 40)
+            for path, label, ftype in ef.TARGETS:
+                records += ef.scrape_ngobase(path, label, ftype)
+            _set("running", "Scraping CSRBox foundations…", 70)
+            records += ef.scrape_csrbox()
+            _set("running", "Deduplicating…", 85)
+            merged = ef.dedupe(records)
+            _set("running", "Writing Excel…", 95)
+            ef.write_excel(merged, cfg["file"])
+        elif slug == "institutional-donors":
+            import extract_institutional as ei
+            import extract_iati as eiat
+            _set("running", "Loading curated donor list…", 25)
+            list_records = ei.curated_records()
+            _set("running", "Querying World Bank projects…", 45)
+            list_records += ei.scrape_worldbank()
+            _set("running", "Querying IATI (India education donors)…", 60)
+            for r in eiat.scrape_iati():
+                list_records.append(ei.make_record(r["donor_name"], source="IATI"))
+            # Dedupe the donor-LIST sources to unique donors.
+            list_records = ei.dedupe(list_records)
+            _set("running", "Fetching OECD CRS (all rows, live)…", 80)
+            # Keep ALL OECD rows (donor x year x amount), no dedupe. Fallback if API down.
+            oecd = ei.oecd_all_records()
+            merged = list_records + (oecd if oecd else ei.oecd_dac_records())
+            _set("running", "Writing Excel…", 95)
+            ei.write_excel(merged, cfg["file"])
+        elif slug == "hnis":
+            import extract_hurun as eh
+            _set("running", "Loading curated philanthropists…", 40)
+            records = eh.curated_records()
+            _set("running", "Scraping Hurun Rich List (top 100)…", 70)
+            records += eh.scrape_richlist()
+            _set("running", "Deduplicating…", 90)
+            merged = eh.dedupe(records)
+            _set("running", "Writing Excel…", 95)
+            eh.write_excel(merged, cfg["file"])
+        elif slug == "fcra":
+            import extract_fcra as efc
+            records = []
+            _set("running", "Loading foreign aid agencies…", 25)
+            records += efc.curated_foreign_aid()
+            _set("running", "Querying IATI (foreign donors)…", 45)
+            records += efc.scrape_iati_foreign()
+            _set("running", "Scraping NGObase global foundations…", 70)
+            records += efc.scrape_ngobase_global()
+            _set("running", "Deduplicating…", 90)
+            merged = efc.dedupe(records)
+            _set("running", "Writing Excel…", 95)
+            efc.write_excel(merged, cfg["file"])
+        else:
+            raise RuntimeError("No data source configured for this category yet.")
+
+        stats = _read_universe_stats(cfg["file"])
+        _set("complete", f"Done — {len(merged)} records extracted.", 100, stats)
+    except Exception as e:
+        print(f"[LeadGen:{slug}] extraction failed: {e}")
+        _set("error", f"Extraction failed: {e}", 100)
+
+
+# ---------------------------------------------------------------------------
+# Lead Generation routes are disabled for this deployment. The handlers,
+# helpers (LEAD_GEN_CATEGORIES, _run_generation, etc.) and extract_*.py
+# scrapers remain in the repo but are not exposed as routes, so the feature
+# is unreachable. Re-enable by restoring the route definitions here.
+# ---------------------------------------------------------------------------
 
 
 @app.route("/company/<company_id>", methods=["GET"])
@@ -358,6 +629,9 @@ def company_detail(company_id):
 def add_company():
     company_name = request.form.get("company_name", "").strip()
     website = request.form.get("website", "").strip() or None
+    company_type = request.form.get("company_type", DEFAULT_COMPANY_CATEGORY).strip()
+    if company_type not in COMPANY_CATEGORIES:
+        company_type = DEFAULT_COMPANY_CATEGORY
     username = session.get("username")
 
     if not company_name:
@@ -374,13 +648,34 @@ def add_company():
         }), 400
 
     # 1. Create company in MongoDB (status: 'new')
-    company_id = create_company(company_name, website, created_by=username)
+    company_id = create_company(company_name, website, created_by=username, company_type=company_type)
 
     set_pipeline_progress(company_id, "queued", "Company added. Preparing the research pipeline.", percent=5)
     threading.Thread(
         target=run_company_pipeline, args=(company_id, company_name, website, username), daemon=True
     ).start()
     return jsonify({"status": "started", "company_id": company_id}), 202
+
+
+@app.route("/research/stop/<company_id>", methods=["POST"])
+@login_required
+@limiter.exempt
+def research_stop(company_id):
+    """Manually stop an in-progress research pipeline (cooperative cancel).
+
+    Flags the pipeline to abort at its next checkpoint so no further LLM/search
+    tokens are spent - useful when a search was started with the wrong name.
+    """
+    username = session.get("username")
+    company = get_company(company_id, username=username)
+    if not company:
+        return jsonify({"status": "error", "message": "Company not found."}), 404
+    request_cancel(company_id)
+    print(f"[Pipeline Stop Requested] '{company.get('company_name', company_id)}' by {username}")
+    return jsonify({
+        "status": "stopping",
+        "message": "Stopping… the current step will finish, then the pipeline halts.",
+    }), 202
 
 
 MAX_BULK_ROWS = 200
@@ -430,6 +725,9 @@ def research_financial():
 def add_companies_bulk():
     upload = request.files.get("csv_file")
     username = session.get("username")
+    company_type = request.form.get("company_type", DEFAULT_COMPANY_CATEGORY).strip()
+    if company_type not in COMPANY_CATEGORIES:
+        company_type = DEFAULT_COMPANY_CATEGORY
     if not upload or not upload.filename:
         return jsonify({"status": "error", "message": "Please choose a CSV or Excel file to upload."}), 400
 
@@ -537,7 +835,7 @@ def add_companies_bulk():
             continue
         seen_names.add(dedupe_key)
 
-        company_id = create_company(company_name, website or None, created_by=username)
+        company_id = create_company(company_name, website or None, created_by=username, company_type=company_type)
         set_pipeline_progress(company_id, "queued", "Company added. Preparing the research pipeline.", percent=5)
         threading.Thread(
             target=run_company_pipeline, args=(company_id, company_name, website or None, username), daemon=True
@@ -549,6 +847,37 @@ def add_companies_bulk():
 
     return jsonify({"status": "started", "started": started, "skipped": skipped}), 202
 
+
+
+@app.route("/active-pipelines", methods=["GET"])
+@login_required
+@limiter.exempt
+def active_pipelines():
+    """Return the caller's still-running pipelines so the dashboard can re-attach
+    its progress UI after a page refresh (progress lives in server memory, but the
+    browser forgets which searches were in flight)."""
+    username = session.get("username")
+    role = session.get("role")
+    with pipeline_jobs_lock:
+        items = list(pipeline_jobs.items())
+    active = []
+    for cid, prog in items:
+        if prog.get("state") not in ("queued", "running"):
+            continue
+        company = get_company(cid, username=username)
+        if not company:
+            continue
+        if role != "admin" and company.get("created_by") != username:
+            continue
+        active.append({
+            "company_id": cid,
+            "company_name": company.get("company_name", "Company"),
+            "stage": prog.get("stage"),
+            "message": prog.get("message"),
+            "state": prog.get("state"),
+            "percent": prog.get("percent", 0),
+        })
+    return jsonify({"active": active})
 
 
 @app.route("/research-progress/<company_id>", methods=["GET"])
@@ -631,16 +960,21 @@ def settings_search():
     username = session.get("username")
     if request.method == "POST":
         provider = request.form.get("search_provider", "serper").strip().lower()
-        api_key = request.form.get("api_key", "").strip()
+        api_key = request.form.get("api_key", "").strip().strip('"').strip("'")
+        deep_scrape = request.form.get("deep_scrape", "auto").strip().lower()
 
         if provider not in ("serper", "tavily"):
             provider = "serper"
+        if deep_scrape not in ("auto", "on", "off"):
+            deep_scrape = "auto"
 
         search_keys = {
             "provider": provider,
             "api_key": api_key,
+            "deep_scrape": deep_scrape,
         }
         update_user_search_keys(username, search_keys)
+        set_search_context(search_keys, username=username)
         success_msg = f"Your personal {provider.capitalize()} API key has been saved!" if api_key else "Web Search API settings updated."
         return render_template(
             "settings_search.html",
@@ -661,6 +995,44 @@ def settings_search():
         active_nav="settings_search",
         impersonating=session.get("impersonated_by"),
     )
+
+
+@app.route("/api/settings/test-search", methods=["POST"])
+@login_required
+def api_test_search_key():
+    data = request.json or {}
+    provider = data.get("provider", "serper").strip().lower()
+    api_key = data.get("api_key", "").strip().strip('"').strip("'")
+
+    if not api_key:
+        return jsonify({"valid": False, "message": "API key is required to run a test."}), 400
+
+    try:
+        if provider == "tavily":
+            from search_tool import _tavily_search_with_limit
+            res = _tavily_search_with_limit("India CSR overview", max_results=1, api_key=api_key)
+            results_count = len(res.get("results", []))
+            return jsonify({"valid": True, "message": f"Tavily connected successfully! (Returned {results_count} test result)"})
+        elif provider == "serper":
+            from search_tool import _serper_search
+            res = _serper_search("India CSR overview", max_results=1, api_key=api_key)
+            results_count = len(res.get("results", []))
+            return jsonify({"valid": True, "message": f"Google Serper connected successfully! (Returned {results_count} test result)"})
+        else:
+            return jsonify({"valid": False, "message": "Unknown provider selected."}), 400
+    except Exception as exc:
+        err_str = str(exc)
+        if "Unauthorized" in err_str or "invalid" in err_str.lower() or "401" in err_str:
+            return jsonify({
+                "valid": False,
+                "message": f"Authentication Failed (401): The {provider.capitalize()} API key was rejected as invalid. For Tavily, ensure the key starts with 'tvly-' and is active on app.tavily.com."
+            }), 400
+        elif "429" in err_str or "rate" in err_str.lower():
+            return jsonify({
+                "valid": False,
+                "message": f"Rate Limit / Quota Exceeded (429): Your {provider.capitalize()} account may have reached its request quota or concurrency limit."
+            }), 400
+        return jsonify({"valid": False, "message": f"Test failed: {err_str}"}), 400
 
 
 @app.route("/settings/zoho", methods=["GET", "POST"])
@@ -820,7 +1192,11 @@ def update_crm_fields(company_id):
         updates["crm.decision_maker_email"] = request.form.get("decision_maker_email", "").strip()
     if "decision_maker_phone" in request.form:
         updates["crm.decision_maker_phone"] = request.form.get("decision_maker_phone", "").strip()
-    
+    if "company_type" in request.form:
+        company_type = request.form.get("company_type", "").strip()
+        if company_type in COMPANY_CATEGORIES:
+            updates["company_type"] = company_type
+
     if updates:
         try:
             update_company(company_id, updates)
@@ -1210,7 +1586,7 @@ def login():
         return redirect(url_for("change_password"))
     if user["role"] == "admin":
         return redirect(url_for("admin_dashboard"))
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("home"))
 
 
 @app.route("/logout", methods=["GET"])

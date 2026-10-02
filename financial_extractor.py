@@ -26,6 +26,12 @@ def filter_csr_annexure_text(text: str, max_chars: int = 15000) -> str:
     seen = set()
     total_len = 0
     for p in paragraphs:
+        # "PDF PAGE n" markers ko hamesha rakho (budget count kiye bina) taaki
+        # har kept paragraph apne sahi page ke neeche rahe - warna LLM figure ko
+        # galat page attribute kar sakta hai.
+        if p.startswith("===== PDF PAGE"):
+            selected.append(p)
+            continue
         p_lower = p.lower()
         if any(k in p_lower for k in CSR_FINANCIAL_KEYWORDS) or any(c.isdigit() for c in p):
             snip = p_lower[:60]
@@ -39,6 +45,37 @@ def filter_csr_annexure_text(text: str, max_chars: int = 15000) -> str:
     if not selected:
         return text[:max_chars]
     return "\n\n".join(selected)
+
+
+def _sanitize_source_pages(raw: dict, allowed_pages: set) -> dict:
+    """
+    LLM ke bheje source page numbers ko validate karta hai - sirf wahi page
+    accept karte hain jo actually diye gaye text ke "PDF PAGE n" markers mein
+    the. Isse hallucinated citations (jaise page jo bheja hi nahi gaya) filter
+    ho jaate hain, taaki frontend pe koi galat/dead page link na dikhe.
+    """
+    raw = raw or {}
+
+    def valid(p):
+        try:
+            return int(p) in allowed_pages
+        except (TypeError, ValueError):
+            return False
+
+    clean = {}
+    for key in ("csr_spend", "csr_unspent_amount", "education_spend"):
+        p = raw.get(key)
+        if valid(p):
+            clean[key] = int(p)
+
+    for hist_key in ("csr_spend_history", "education_spend_history"):
+        hist = raw.get(hist_key)
+        if isinstance(hist, dict):
+            clean_hist = {fy: int(p) for fy, p in hist.items() if valid(p)}
+            if clean_hist:
+                clean[hist_key] = clean_hist
+
+    return clean
 
 
 def extract_csr_data(pdf_text: str, company_name: str):
@@ -59,6 +96,10 @@ def extract_csr_data(pdf_text: str, company_name: str):
     filtered_text = filter_csr_annexure_text(pdf_text, max_chars=15000)
 
     prompt = f"""
+    The source text below is split by marker lines like "===== PDF PAGE 147 =====",
+    where 147 is the annual report's PDF page number for the text that follows it,
+    up to the next such marker.
+
     From the CSR Annexure / Board's Report section of the annual report, extract the
     CSR data for {company_name}:
 
@@ -87,6 +128,10 @@ def extract_csr_data(pdf_text: str, company_name: str):
     11. Education Spend Percentage (current year) - education spend as a percentage of total CSR spend (e.g. 35.5).
     12. Education Spend History (previous years) - as many years as are available.
         Format: {{"FY24": {{"amount": <crores>, "percentage": <pct of that year's CSR spend>}}, ...}}
+    13. Source Pages - for each figure you extract, the PDF page number (from the
+        nearest "===== PDF PAGE n =====" marker ABOVE where you read that figure).
+        Only use page numbers that actually appear as markers in the text below.
+        If you cannot determine the page for a figure, omit that key.
 
     Text:
     {filtered_text}
@@ -105,7 +150,14 @@ def extract_csr_data(pdf_text: str, company_name: str):
         "csr_spend_history": {{"FY24": <number in Crores>, "FY23": <number in Crores>}},
         "education_spend": <number in Crores or null>,
         "education_spend_percentage": <number or null>,
-        "education_spend_history": {{"FY24": {{"amount": <crores>, "percentage": <pct>}}, "FY23": {{...}}}}
+        "education_spend_history": {{"FY24": {{"amount": <crores>, "percentage": <pct>}}, "FY23": {{...}}}},
+        "source_pages": {{
+            "csr_spend": <PDF page number or null>,
+            "csr_unspent_amount": <PDF page number or null>,
+            "education_spend": <PDF page number or null>,
+            "csr_spend_history": {{"FY24": <PDF page number>, "FY23": <PDF page number>}},
+            "education_spend_history": {{"FY24": <PDF page number>, "FY23": <PDF page number>}}
+        }}
     }}
     """
 
@@ -131,6 +183,11 @@ def extract_csr_data(pdf_text: str, company_name: str):
             fy: entry for fy, entry in edu_history.items()
             if isinstance(entry, dict) and entry.get("amount") is not None
         }
+
+        # Page-number sources ko validate karo - sirf wahi pages jo actually
+        # LLM ko diye gaye text (filtered_text) ke markers mein the.
+        allowed_pages = {int(m) for m in re.findall(r"PDF PAGE (\d+)", filtered_text)}
+        data["source_pages"] = _sanitize_source_pages(data.get("source_pages"), allowed_pages)
 
         return data, None
 
