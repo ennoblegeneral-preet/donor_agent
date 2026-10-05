@@ -56,3 +56,4 @@ stitch_donoriq_ai_crm_frontend/
 .DS_Store
 Thumbs.db
 .agents/
+referest.py

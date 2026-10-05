@@ -282,7 +282,10 @@ _tavily_semaphore = threading.Semaphore(3)  # Rate limit to ~3 concurrent Tavily
 
 INDIA_DOMAINS = [".in", "india.", "bharat.", "gov.in", "mca.gov.in"]
 INDIA_SOURCE_DOMAINS = ["csrbox.org", "linkedin.com", "zaubacorp.com", "tofler.in"]
-NON_INDIA_INDICATORS = ["usa.", "uk.", "america.", "global", "worldwide", "en.wikipedia"]
+# Only genuine country markers. "global" / "worldwide" / "en.wikipedia" used to be
+# here, but they rejected India CSR pages on MNC sites (e.g. schaeffler.com/global/...)
+# and Wikipedia company articles before the page text was ever checked for India.
+NON_INDIA_INDICATORS = ["usa.", "uk.", "america."]
 
 def _is_india_result(url: str, content: str = "") -> bool:
     """Check if a URL/content is India-specific"""
@@ -498,7 +501,7 @@ def search_contact_sources(company_name: str, website: str = None) -> dict:
 
     # --- Phase 2: HR / leadership FALLBACK (only if no CSR contact source found) ---
     if not collected:
-        hr_roles = '"Head HR" OR "HR Head" OR "HR Manager", "Senior HR" OR '
+        hr_roles = '"Head HR" OR "HR Head" OR "HR Manager" OR "Senior HR" OR "HR Executive"'
         hr_stages = [
             {
                 "priority": 4,
@@ -572,11 +575,13 @@ def search_company_csr_info(company_name: str, website: str = None):
 
     csr_stages = [
         # 1. Total CSR Expenditure & Previous Year Spend
-        {
-            "priority": 1,
-            "source_type": "Financial / CSR Previous Year",
-            "query": f'"{company_name}" CSR ("total CSR expenditure" OR "CSR spend" OR "CSR obligation" OR "actual spend" OR "amount spent") (crore OR lakh) ("FY25" OR "FY 2024-25" OR "FY24" OR "FY 2023-24" OR "FY23") {" ".join(_recent_indian_fiscal_years())} ("annual report" OR BRSR OR site:csrbox.org OR "National CSR Portal")',
-        },
+        # [DISABLED - CSR spend is taken from the annual report (financial pass /
+        # csr_data) instead; saves 1 search credit per company]
+        # {
+        #     "priority": 1,
+        #     "source_type": "Financial / CSR Previous Year",
+        #     "query": f'"{company_name}" CSR ("total CSR expenditure" OR "CSR spend" OR "CSR obligation" OR "actual spend" OR "amount spent") (crore OR lakh) ("FY25" OR "FY 2024-25" OR "FY24" OR "FY 2023-24" OR "FY23") {" ".join(_recent_indian_fiscal_years())} ("annual report" OR BRSR OR site:csrbox.org OR "National CSR Portal")',
+        # },
         # 2. Education Previous Year CSR Spend & Sector Breakdown
         # {
         #     "priority": 1,
@@ -1026,7 +1031,7 @@ EDUCATION_FIELD_QUERIES = {
     "csr_education_spend_history": [
         '{company} CSR ("education spend" OR "spent on education" OR "education budget" OR "promotion of education") (crore OR lakh OR "FY25" OR "FY24" OR "FY23" OR "2024" OR "2023")',
     ],
-    "csr_past_3yr_spend": [
+    "csr_past_3yr_spend": [ 
         '{company} CSR ("average CSR" OR "3 years CSR" OR "past three years" OR "CSR spend trend" OR "FY 2023-24" OR "FY 2024-25") (expenditure OR obligation OR spent)',
     ],
     "csr_education_validation": [
