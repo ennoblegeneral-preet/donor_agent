@@ -1,5 +1,6 @@
 import certifi
 import re
+import uuid
 from pymongo import MongoClient
 from datetime import datetime
 import os
@@ -17,6 +18,15 @@ companies_col = _legacy_companies_col  # alias used by audit_logger
 
 audit_log_col = db["audit_log"]
 users_col = db["users"]
+
+# Lead Gen (CSR / Corporates) universe + PBT classes, shared by every server.
+# Named lead_csr_* (not companies_*) because get_all_companies() /
+# _find_company_col() treat every companies_* collection as user data.
+lead_data_col = db["lead_csr_data"]   # one doc per row, tagged _key / _batch / _i
+lead_meta_col = db["lead_csr_meta"]   # one doc per set: {_id: key, batch, count, saved_at, ...}
+LEAD_UNIVERSE_KEY = "universe"
+LEAD_PBT_KEY = "pbt"
+LEAD_INSERT_CHUNK = 5000
 
 
 def _safe_collection_name(username: str) -> str:
@@ -260,6 +270,40 @@ def get_employee_stats(username: str) -> dict:
         "approved": col.count_documents({"approval_status": "approved"}),
         "crm_added": col.count_documents({"upload_status": "uploaded"}),
     }
+
+
+# ─────────────────────────────────────────────
+# Lead Gen CSR sets — saved as a new batch, then switched over in one write,
+# so readers never see a half-uploaded set
+# ─────────────────────────────────────────────
+def save_lead_set(key: str, docs: list, **extra) -> dict:
+    """Replace the `key` set with `docs`; `extra` fields go on its meta doc."""
+    lead_data_col.create_index([("_key", 1), ("_batch", 1), ("_i", 1)])
+    batch = uuid.uuid4().hex
+    for start in range(0, len(docs), LEAD_INSERT_CHUNK):
+        chunk = docs[start:start + LEAD_INSERT_CHUNK]
+        lead_data_col.insert_many([dict(d, _key=key, _batch=batch, _i=start + n)
+                                   for n, d in enumerate(chunk)])
+    meta = dict(extra, _id=key, batch=batch, count=len(docs), saved_at=datetime.utcnow())
+    lead_meta_col.replace_one({"_id": key}, meta, upsert=True)
+    # Old batches (and leftovers of a failed upload) go only after the switch.
+    lead_data_col.delete_many({"_key": key, "_batch": {"$ne": batch}})
+    return meta
+
+
+def get_lead_meta(key: str) -> dict:
+    return lead_meta_col.find_one({"_id": key})
+
+
+def load_lead_set(meta: dict) -> list:
+    """Docs of the batch `meta` points at, in saved order."""
+    return list(lead_data_col.find({"_key": meta["_id"], "_batch": meta["batch"]},
+                                   {"_id": 0, "_key": 0, "_batch": 0, "_i": 0}).sort("_i", 1))
+
+
+def clear_lead_set(key: str):
+    lead_meta_col.delete_one({"_id": key})
+    lead_data_col.delete_many({"_key": key})
 
 
 def get_tier_a_companies(username: str = None, role: str = None) -> list:
