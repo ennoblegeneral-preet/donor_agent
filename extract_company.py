@@ -304,18 +304,35 @@ def drop_lowest_unlisted(records, n=UNLISTED_DROP_COUNT):
 # ---------------------------------------------------------------------------
 # Write Excel
 # ---------------------------------------------------------------------------
+UNIVERSE_HEADERS = ["Company Name", "ISIN", "Sector", "Listing Status",
+                    "Paid-up Capital (Rs)", "Source(s)"]
+
+
+def universe_rows(records):
+    """Sorted universe rows in UNIVERSE_HEADERS order (shared by Excel + MongoDB)."""
+    return [[rec["company_name"], rec["isin"] or "",
+             rec["sector"] or "", rec["listing_status"],
+             rec.get("paidup_capital") or "", rec["source"]]
+            for rec in sorted(records, key=lambda r: r["company_name"].lower())]
+
+
 def write_excel(records, filename="company_universe.xlsx"):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Company Universe"
-    ws.append(["Company Name", "ISIN", "Sector", "Listing Status",
-               "Paid-up Capital (Rs)", "Source(s)"])
-    for rec in sorted(records, key=lambda r: r["company_name"].lower()):
-        ws.append([rec["company_name"], rec["isin"] or "",
-                   rec["sector"] or "", rec["listing_status"],
-                   rec.get("paidup_capital") or "", rec["source"]])
+    ws.append(UNIVERSE_HEADERS)
+    for row in universe_rows(records):
+        ws.append(row)
     wb.save(filename)
     print(f"[excel] wrote {len(records)} rows -> {filename}")
+
+
+def save_universe_rows(headers, rows):
+    """Save the universe to MongoDB so every server shows the same list."""
+    import db
+    db.save_lead_set(db.LEAD_UNIVERSE_KEY, [{"r": list(r)} for r in rows],
+                     headers=list(headers))
+    print(f"[mongo] saved {len(rows)} universe rows")
 
 
 # ---------------------------------------------------------------------------

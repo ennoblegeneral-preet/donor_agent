@@ -18,7 +18,8 @@ from db import (
     create_user, get_user_by_username, get_user_by_id, get_all_users, update_user,
     get_user_zoho_keys, update_user_zoho_keys,
     get_user_search_keys, update_user_search_keys, get_employee_stats,
-    COMPANY_CATEGORIES, DEFAULT_COMPANY_CATEGORY
+    COMPANY_CATEGORIES, DEFAULT_COMPANY_CATEGORY,
+    get_lead_meta, load_lead_set, clear_lead_set, LEAD_UNIVERSE_KEY, LEAD_PBT_KEY
 )
 from search_tool import set_search_context, get_effective_search_config, start_search_tracking, get_tracked_search_usage
 from auth import hash_password, verify_password, generate_random_password, login_required, admin_required
@@ -491,32 +492,72 @@ def _filter_by_listing(headers, data, listing):
 # Class (A/B/C/D/NA, or Review when verify_pbt_matches.py could not confirm the
 # Screener match) for listed CSR companies, written by categorize_pbt.py.
 # Listed companies not yet fetched by that script get a blank Class.
+# Read from the local cache file when present (live while the script runs),
+# else from the copy push_csr_to_db.py saved in MongoDB (servers).
 PBT_CACHE_FILE = "company_pbt_cache.jsonl"
 PBT_CLASSES = ("A", "B", "C", "D", "NA", "Review")
 PBT_CLASS_FILTERS = ("all",) + PBT_CLASSES
 PBT_COLUMNS = ["Screener Name", "Class"]
 PREVIEW_PAGE_SIZE = 25
-_pbt_cache = {"mtime": None, "by_name": {}, "by_isin": {}}
+_pbt_cache = {"version": None, "by_name": {}, "by_isin": {}}
+# CSR universe saved in MongoDB, re-read only when its batch changes.
+_csr_universe_cache = {"batch": None, "headers": None, "rows": None}
 
 
-def _load_pbt_classes():
-    """(by_name, by_isin) lookups from the categorize_pbt.py cache, re-read on change."""
-    if not os.path.exists(PBT_CACHE_FILE):
-        return {}, {}
-    mtime = os.path.getmtime(PBT_CACHE_FILE)
-    if _pbt_cache["mtime"] != mtime:
-        by_name, by_isin = {}, {}
+def _pbt_records():
+    """(version, records) from the local cache file or MongoDB; records is None
+    when the version is unchanged (caller keeps its lookups)."""
+    if os.path.exists(PBT_CACHE_FILE):
+        version = os.path.getmtime(PBT_CACHE_FILE)
+        if _pbt_cache["version"] == version:
+            return version, None
+        records = []
         with open(PBT_CACHE_FILE, encoding="utf-8") as f:
             for line in f:
                 try:
-                    rec = json.loads(line)
+                    records.append(json.loads(line))
                 except ValueError:
                     continue  # partial line while the script is still writing
-                by_name[rec["company_name"]] = rec
-                if rec.get("isin"):
-                    by_isin[rec["isin"]] = rec
-        _pbt_cache.update(mtime=mtime, by_name=by_name, by_isin=by_isin)
+        return version, records
+    meta = get_lead_meta(LEAD_PBT_KEY)
+    if not meta:
+        return None, []
+    if _pbt_cache["version"] == meta["batch"]:
+        return meta["batch"], None
+    return meta["batch"], load_lead_set(meta)
+
+
+def _load_pbt_classes():
+    """(by_name, by_isin) lookups for the Class column, re-read on change."""
+    try:
+        version, records = _pbt_records()
+    except Exception as e:
+        print(f"[LeadGen] PBT class read error: {e}")
+        return _pbt_cache["by_name"], _pbt_cache["by_isin"]
+    if records is not None:
+        by_name, by_isin = {}, {}
+        for rec in records:  # later lines win, as in categorize_pbt.load_cache()
+            by_name[rec["company_name"]] = rec
+            if rec.get("isin"):
+                by_isin[rec["isin"]] = rec
+        _pbt_cache.update(version=version, by_name=by_name, by_isin=by_isin)
     return _pbt_cache["by_name"], _pbt_cache["by_isin"]
+
+
+def _csr_universe_from_db():
+    """(headers, rows, saved_at) of the CSR universe in MongoDB, or None if none
+    is saved or the database is unreachable (callers fall back to the file)."""
+    try:
+        meta = get_lead_meta(LEAD_UNIVERSE_KEY)
+        if not meta:
+            return None
+        if _csr_universe_cache["batch"] != meta["batch"]:
+            rows = [tuple(d["r"]) for d in load_lead_set(meta)]
+            _csr_universe_cache.update(batch=meta["batch"], headers=meta["headers"], rows=rows)
+        return _csr_universe_cache["headers"], _csr_universe_cache["rows"], meta["saved_at"]
+    except Exception as e:
+        print(f"[LeadGen] universe DB read error: {e}")
+        return None
 
 
 def _attach_pbt_columns(headers, data):
@@ -552,20 +593,30 @@ def _row_key_fn(headers):
 
 
 def _read_universe_rows(filename):
-    """Return (headers, data rows) from a generated Excel, or None if absent/empty."""
-    if not filename or not os.path.exists(filename):
-        return None
-    import openpyxl
-    wb = openpyxl.load_workbook(filename, read_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    wb.close()
-    if not rows:
-        return None
-    headers = [str(h) if h is not None else "" for h in rows[0]]
-    if filename == LEAD_GEN_CATEGORIES["csr-corporates"]["file"] and "Listing Status" in headers:
-        return _attach_pbt_columns(headers, rows[1:])
-    return headers, rows[1:]
+    """Return (headers, data rows, generated_at UTC datetime) from a generated
+    Excel, or None if absent/empty. The CSR universe comes from MongoDB when one
+    is saved there, so every server shows the same list."""
+    is_csr = filename == LEAD_GEN_CATEGORIES["csr-corporates"]["file"]
+    saved = _csr_universe_from_db() if is_csr else None
+    if saved:
+        headers, data, generated_at = saved
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+    else:
+        if not filename or not os.path.exists(filename):
+            return None
+        import openpyxl
+        wb = openpyxl.load_workbook(filename, read_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        if not rows:
+            return None
+        headers = [str(h) if h is not None else "" for h in rows[0]]
+        data = rows[1:]
+        generated_at = datetime.fromtimestamp(os.path.getmtime(filename), tz=timezone.utc)
+    if is_csr and "Listing Status" in headers:
+        headers, data = _attach_pbt_columns(headers, data)
+    return headers, data, generated_at
 
 
 def _read_universe_stats(filename, listing="all", cls="all", q="", page=1):
@@ -578,7 +629,7 @@ def _read_universe_stats(filename, listing="all", cls="all", q="", page=1):
         parsed = _read_universe_rows(filename)
         if not parsed:
             return None
-        headers, data = parsed
+        headers, data, generated_at = parsed
         counts = {f: len(_filter_by_listing(headers, data, f)) for f in LISTING_FILTERS}
         data = _filter_by_listing(headers, data, listing)
         class_counts = None
@@ -596,13 +647,10 @@ def _read_universe_stats(filename, listing="all", cls="all", q="", page=1):
         preview = [[("" if v is None else v) for v in r] for r in page_rows]
         key_fn = _row_key_fn(headers)
         keys = [key_fn(r) for r in page_rows] if key_fn else None
-        generated_at = datetime.fromtimestamp(
-            os.path.getmtime(filename), tz=timezone.utc
-        ).isoformat()
         return {"total": len(data), "headers": headers, "listing": listing,
                 "counts": counts, "class": cls, "class_counts": class_counts,
                 "q": q, "page": page, "pages": pages, "keys": keys,
-                "preview": preview, "generated_at": generated_at}
+                "preview": preview, "generated_at": generated_at.isoformat()}
     except Exception as e:
         print(f"[LeadGen] stats read error: {e}")
         return None
@@ -634,6 +682,8 @@ def _run_generation(slug):
             merged = ec.dedupe(records)
             _set("running", "Removing lowest paid-up unlisted companies…", 90)
             merged = ec.drop_lowest_unlisted(merged)
+            _set("running", "Saving to database…", 92)
+            ec.save_universe_rows(ec.UNIVERSE_HEADERS, ec.universe_rows(merged))
             _set("running", "Writing Excel…", 95)
             ec.write_excel(merged, cfg["file"])
         elif slug == "family-foundations":
@@ -782,7 +832,10 @@ def lead_generation_download(slug):
     """GET: whole file, or rows matching ?listing= / ?class=.
     POST {"keys": [...]}: only the selected rows (CSR selection keys)."""
     cfg = LEAD_GEN_CATEGORIES.get(slug)
-    if not cfg or not cfg["file"] or not os.path.exists(cfg["file"]):
+    if not cfg or not cfg["file"]:
+        abort(404)
+    # The CSR universe may live only in MongoDB (no local file on a server).
+    if slug != "csr-corporates" and not os.path.exists(cfg["file"]):
         abort(404)
     listing = request.args.get("listing", "all").lower()
     if listing not in ("listed", "unlisted"):
@@ -799,7 +852,10 @@ def lead_generation_download(slug):
         return send_file(cfg["file"], as_attachment=True, download_name=cfg["download"])
     # Filtered / selected download (or CSR with Class columns): rebuild a workbook.
     import openpyxl
-    headers, data = _read_universe_rows(cfg["file"])
+    parsed = _read_universe_rows(cfg["file"])
+    if not parsed:
+        abort(404)
+    headers, data, _ = parsed
     if selected is not None:
         key_fn = _row_key_fn(headers)
         if not key_fn:
@@ -835,6 +891,8 @@ def lead_generation_delete(slug):
     try:
         if cfg["file"] and os.path.exists(cfg["file"]):
             os.remove(cfg["file"])
+        if slug == "csr-corporates":
+            clear_lead_set(LEAD_UNIVERSE_KEY)
         with lead_gen_lock:
             lead_gen_jobs[slug] = {"state": "idle", "message": "", "percent": 0, "stats": None}
         return jsonify({"status": "deleted"})
