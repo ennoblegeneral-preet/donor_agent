@@ -194,6 +194,16 @@
             {% endfor %}
         </select>
         {% endif %}
+        <span class="font-body-sm text-body-sm text-on-surface-variant">Education Fit:</span>
+        <select id="fitFilter" class="font-label-md text-label-md text-on-surface bg-[#1A1D2E] border border-[#2E3245] px-3 py-1.5 rounded focus:outline-none">
+            <option value="">All Programs</option>
+            <option value="STEM Education">STEM Education</option>
+            <option value="School Infrastructure Transformation">School Infrastructure</option>
+            <option value="Holistic School Transformation">Holistic School</option>
+            <option value="Anganwadi Transformation">Anganwadi</option>
+            <option value="Quality Education">Quality Education</option>
+            <option value="Model School Transformation">Model School</option>
+        </select>
         <span class="font-body-sm text-body-sm text-on-surface-variant">Sort:</span>
         <select id="sortSelect" class="font-label-md text-label-md text-on-surface bg-[#1A1D2E] border border-[#2E3245] px-3 py-1.5 rounded focus:outline-none">
             <option value="score-desc">Score (High to Low)</option>
@@ -278,6 +288,7 @@
          data-stage="{{ c.get('record_stage', '') }}"
          data-score="{{ score }}"
          data-owner="{{ c.get('created_by') or '' }}"
+         data-fit="{% for k, v in (c.get('program_fitment') or {}).items() if k != 'Ennoble Fitment' and v in ['High Fit', 'Medium Fit'] %}{{ k }}|{% endfor %}"
          data-created="{{ c.created_at.isoformat() if c.get('created_at') else '' }}">
         <label class="dm-select-checkbox hidden" style="position:absolute; top:10px; right:10px; z-index:4; width:22px; height:22px;">
             <input type="checkbox" class="dm-select-input" data-id="{{ c.id_str }}" data-name="{{ c.company_name }}" onchange="updateDmSelection()" style="width:20px; height:20px; cursor:pointer; accent-color:#8b5cf6;">
@@ -745,16 +756,18 @@
 
         document.getElementById('searchHint')?.classList.add('hidden');
         const ownerFilter = document.getElementById('ownerFilter')?.value || '';
+        const fitFilter = document.getElementById('fitFilter')?.value || '';
         let visibleCount = 0;
         document.querySelectorAll('.company-card').forEach(card => {
             const matchesOwner = !ownerFilter || card.dataset.owner === ownerFilter;
+            const matchesFit = !fitFilter || (card.dataset.fit || '').split('|').includes(fitFilter);
             const matchesFilter = activeFilter === 'all'
                 || (activeFilter === 'researching' && card.dataset.status !== 'scored' && card.dataset.status !== 'failed_research')
                 || (activeFilter === 'scored' && card.dataset.status === 'scored')
                 || (activeFilter === 'tier-a' && card.dataset.tier === 'Tier A')
                 || (activeFilter === 'tier-b' && card.dataset.tier === 'Tier B')
                 || (activeFilter === 'prospect' && card.dataset.stage === 'Prospect');
-            const visible = matchesOwner && matchesFilter;
+            const visible = matchesOwner && matchesFilter && matchesFit;
             card.style.display = visible ? '' : 'none';
             if (visible) visibleCount++;
         });
@@ -762,6 +775,7 @@
     }
     document.getElementById('companySearchTab')?.addEventListener('input', applyFilters);
     document.getElementById('ownerFilter')?.addEventListener('change', applyFilters);
+    document.getElementById('fitFilter')?.addEventListener('change', applyFilters);
     document.querySelectorAll('.filter-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             document.querySelectorAll('.filter-tab').forEach(t => {
