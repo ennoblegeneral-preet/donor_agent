@@ -127,7 +127,7 @@
             </div>
         </div>
         <div id="classFilter" class="listing-filter" role="group" aria-label="Filter by class">
-            {% for key, name in [('all', 'All'), ('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D'), ('NA', 'NA'), ('Review', 'Review')] %}
+            {% for key, name in [('all', 'All'), ('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D'), ('NA', 'NA'), ('Recently Listed', 'Recently Listed')] %}
             <button type="button" data-class="{{ key }}" class="{% if key == 'all' %}active{% endif %}" onclick="setClassFilter('{{ key }}')">
                 <span class="listing-filter-name">{{ name }}</span>
                 <span class="listing-filter-count" data-class-count="{{ key }}">{{ class_counts.get(key, 0) }}</span>

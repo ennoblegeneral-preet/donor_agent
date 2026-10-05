@@ -489,13 +489,15 @@ def _filter_by_listing(headers, data, listing):
     return [r for r in data if str(r[idx] or "").strip().lower() == listing]
 
 
-# Class (A/B/C/D/NA, or Review when verify_pbt_matches.py could not confirm the
-# Screener match) for listed CSR companies, written by categorize_pbt.py.
+# Class (A/B/C/D/NA, or Recently Listed when verify_pbt_matches.py could not
+# confirm the Screener match) for listed CSR companies, written by categorize_pbt.py.
+# The scripts store that last class as "Review"; it is renamed here for display.
 # Listed companies not yet fetched by that script get a blank Class.
 # Read from the local cache file when present (live while the script runs),
 # else from the copy push_csr_to_db.py saved in MongoDB (servers).
 PBT_CACHE_FILE = "company_pbt_cache.jsonl"
-PBT_CLASSES = ("A", "B", "C", "D", "NA", "Review")
+PBT_CLASSES = ("A", "B", "C", "D", "NA", "Recently Listed")
+PBT_CLASS_LABELS = {"Review": "Recently Listed"}
 PBT_CLASS_FILTERS = ("all",) + PBT_CLASSES
 PBT_COLUMNS = ["Screener Name", "Class"]
 PREVIEW_PAGE_SIZE = 25
@@ -570,8 +572,8 @@ def _attach_pbt_columns(headers, data):
         rec = None
         if str(r[i_status] or "").strip().lower() == "listed":
             rec = by_name.get(r[i_name]) or by_isin.get(r[i_isin])
-        out.append(tuple(r) + ((rec.get("screener_name"), rec.get("category")) if rec
-                               else (None, None)))
+        cls = rec and PBT_CLASS_LABELS.get(rec.get("category"), rec.get("category"))
+        out.append(tuple(r) + ((rec.get("screener_name"), cls) if rec else (None, None)))
     return headers + PBT_COLUMNS, out
 
 
@@ -864,7 +866,7 @@ def lead_generation_download(slug):
         suffix = "_selected"
     else:
         rows = _filter_by_pbt_class(headers, _filter_by_listing(headers, data, listing), cls)
-        suffix = "".join(f"_{s}" for s in (listing, cls) if s != "all")
+        suffix = "".join(f"_{s.replace(' ', '_')}" for s in (listing, cls) if s != "all")
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(headers)
