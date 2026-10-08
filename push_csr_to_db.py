@@ -12,6 +12,7 @@ Run again after categorize_pbt.py / verify_pbt_matches.py to refresh the classes
 Usage:
     python push_csr_to_db.py            # upload both
     python push_csr_to_db.py --dry-run  # only print what would be uploaded
+    python push_csr_to_db.py --force    # upload even if much smaller than MongoDB's copy
 """
 import argparse
 from collections import Counter
@@ -20,6 +21,7 @@ import openpyxl
 
 UNIVERSE_FILE = "company_universe.xlsx"
 PBT_FIELDS = ("company_name", "isin", "screener_name", "category")
+SHRINK_LIMIT = 0.8  # refuse a universe below 80% of the saved row count
 
 
 def read_universe():
@@ -38,6 +40,8 @@ def read_pbt():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true",
+                        help="upload even if the universe is much smaller than MongoDB's")
     args = parser.parse_args()
 
     headers, rows = read_universe()
@@ -47,10 +51,17 @@ def main():
     pbt = read_pbt()
     print(f"[pbt] {len(pbt)} records | "
           + " ".join(f"{k}={v}" for k, v in sorted(Counter(r["category"] for r in pbt).items())))
+    import db
+    saved = (db.get_lead_meta(db.LEAD_UNIVERSE_KEY) or {}).get("count", 0)
+    print(f"[mongo] universe currently has {saved} rows")
+    # A failed source (e.g. MCA down) shrinks the file; don't overwrite good data with it.
+    if len(rows) < saved * SHRINK_LIMIT and not args.force:
+        print(f"[stop] {len(rows)} rows is under {SHRINK_LIMIT:.0%} of MongoDB's {saved} "
+              "- check the file, or pass --force to upload anyway")
+        return
     if args.dry_run:
         return
 
-    import db
     from extract_company import save_universe_rows
     save_universe_rows(headers, rows)
     db.save_lead_set(db.LEAD_PBT_KEY, pbt)
