@@ -489,16 +489,18 @@ def _filter_by_listing(headers, data, listing):
     return [r for r in data if str(r[idx] or "").strip().lower() == listing]
 
 
-# Class (A/B/C/D/NA, or Recently Listed when verify_pbt_matches.py could not
+# Class (A/B/C/D1-D5/Loss Making/NA, or Recently Listed when verify_pbt_matches.py could not
 # confirm the Screener match) for listed CSR companies, written by categorize_pbt.py.
 # The scripts store that last class as "Review"; it is renamed here for display.
 # Listed companies not yet fetched by that script get a blank Class.
 # Read from the local cache file when present (live while the script runs),
 # else from the copy push_csr_to_db.py saved in MongoDB (servers).
 PBT_CACHE_FILE = "company_pbt_cache.jsonl"
-PBT_CLASSES = ("A", "B", "C", "D", "NA", "Recently Listed")
+PBT_CLASSES = ("A", "B", "C", "D", "Loss Making", "NA", "Recently Listed")
+# Rows carry D1-D5; the "D" filter matches all of them.
+PBT_D_CLASSES = ("D1", "D2", "D3", "D4", "D5")
 PBT_CLASS_LABELS = {"Review": "Recently Listed"}
-PBT_CLASS_FILTERS = ("all",) + PBT_CLASSES
+PBT_CLASS_FILTERS = ("all",) + PBT_CLASSES + PBT_D_CLASSES
 PBT_COLUMNS = ["Screener Name", "Class"]
 PREVIEW_PAGE_SIZE = 25
 _pbt_cache = {"version": None, "by_name": {}, "by_isin": {}}
@@ -578,10 +580,13 @@ def _attach_pbt_columns(headers, data):
 
 
 def _filter_by_pbt_class(headers, data, cls):
-    """Keep rows whose "Class" matches `cls`; "all" or no column → unfiltered."""
-    if cls not in PBT_CLASSES or "Class" not in headers:
+    """Keep rows whose "Class" matches `cls` ("D" = any of D1-D5); "all" or no
+    column → unfiltered."""
+    if cls not in PBT_CLASS_FILTERS[1:] or "Class" not in headers:
         return data
     idx = headers.index("Class")
+    if cls == "D":
+        return [r for r in data if str(r[idx] or "").startswith("D")]
     return [r for r in data if r[idx] == cls]
 
 
@@ -636,8 +641,8 @@ def _read_universe_stats(filename, listing="all", cls="all", q="", page=1):
         data = _filter_by_listing(headers, data, listing)
         class_counts = None
         if "Class" in headers:
-            idx = headers.index("Class")
-            class_counts = {c: sum(1 for r in data if r[idx] == c) for c in PBT_CLASSES}
+            class_counts = {c: len(_filter_by_pbt_class(headers, data, c))
+                            for c in PBT_CLASS_FILTERS[1:]}
             class_counts["all"] = len(data)
             data = _filter_by_pbt_class(headers, data, cls)
         if q:
@@ -843,7 +848,7 @@ def lead_generation_download(slug):
     if listing not in ("listed", "unlisted"):
         listing = "all"
     cls = request.args.get("class", "all")
-    if cls not in PBT_CLASSES:
+    if cls not in PBT_CLASS_FILTERS:
         cls = "all"
     selected = None
     if request.method == "POST":
