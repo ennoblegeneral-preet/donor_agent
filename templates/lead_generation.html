@@ -19,6 +19,8 @@
     }
     .listing-filter-count { font-size: 1rem; font-weight: 600; color: #e2e2eb; font-variant-numeric: tabular-nums; }
     .listing-filter button.active .listing-filter-count { color: #c0c1ff; }
+    .listing-filter-budget { font-size: 0.65rem; font-weight: 400; color: #908fa0; text-align: center; line-height: 1.2; }
+    .listing-filter button.active .listing-filter-budget { color: #c0c1ff; opacity: 0.8; }
     .listing-filter button + button { border-left: 1px solid #2E3245; }
     .listing-filter button:hover { background: rgba(255,255,255,0.05); }
     .listing-filter button.active { background: rgba(192,193,255,0.15); color: #c0c1ff; }
@@ -108,6 +110,7 @@
             <div class="flex items-center gap-2">
                 <span class="material-symbols-outlined text-primary/70 text-[20px]">workspace_premium</span>
                 <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Class</h3>
+                <span class="font-body-sm text-body-sm text-on-surface-variant">· by annual CSR budget</span>
             </div>
             <div class="flex flex-wrap items-center gap-2">
                 <span id="selectedInfo" class="font-body-sm text-body-sm text-on-surface-variant hidden">
@@ -127,10 +130,27 @@
             </div>
         </div>
         <div id="classFilter" class="listing-filter" role="group" aria-label="Filter by class">
-            {% for key, name in [('all', 'All'), ('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D'), ('NA', 'NA'), ('Recently Listed', 'Recently Listed')] %}
+            {% for key, name, budget in [('all', 'All', 'All budgets'), ('A', 'A', '> ₹1,000 Cr'), ('B', 'B', '₹500 – 1,000 Cr'), ('C', 'C', '₹100 – 500 Cr'), ('D', 'D', '< ₹100 Cr'), ('Loss Making', 'Loss Making', 'No budget'), ('NA', 'NA', 'No data'), ('Recently Listed', 'Recently Listed', 'Not yet known')] %}
             <button type="button" data-class="{{ key }}" class="{% if key == 'all' %}active{% endif %}" onclick="setClassFilter('{{ key }}')">
                 <span class="listing-filter-name">{{ name }}</span>
                 <span class="listing-filter-count" data-class-count="{{ key }}">{{ class_counts.get(key, 0) }}</span>
+                <span class="listing-filter-budget">{{ budget }}</span>
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+    <!-- D sub-class filter: shown only while D (or one of D1-D5) is selected -->
+    <div id="dClassFilterCard" class="glass-card rounded-xl p-stack-md col-span-2 md:col-span-4 flex flex-col hidden">
+        <div class="flex items-center gap-2 mb-2">
+            <span class="material-symbols-outlined text-primary/70 text-[20px]">segment</span>
+            <h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Class D</h3>
+        </div>
+        <div id="dClassFilter" class="listing-filter" role="group" aria-label="Filter by class D sub-class">
+            {% for key, name, budget in [('D', 'All D', '< ₹100 Cr'), ('D1', 'D1', '₹25 – 100 Cr'), ('D2', 'D2', '₹5 – 25 Cr'), ('D3', 'D3', '₹1 – 5 Cr'), ('D4', 'D4', '₹10 L – 1 Cr'), ('D5', 'D5', '< ₹10 L')] %}
+            <button type="button" data-class="{{ key }}" onclick="setClassFilter('{{ key }}')">
+                <span class="listing-filter-name">{{ name }}</span>
+                <span class="listing-filter-count" data-class-count="{{ key }}">{{ class_counts.get(key, 0) }}</span>
+                <span class="listing-filter-budget">{{ budget }}</span>
             </button>
             {% endfor %}
         </div>
@@ -201,7 +221,7 @@
     const selectedKeys = new Set();
 
     function loadStats(listing, cls, page) {
-        const buttons = document.querySelectorAll('#listingFilter button, #classFilter button');
+        const buttons = document.querySelectorAll('#listingFilter button, #classFilter button, #dClassFilter button');
         buttons.forEach(b => b.disabled = true);
         const params = new URLSearchParams({ listing, class: cls, page,
             q: document.getElementById('previewSearch').value.trim() });
@@ -349,10 +369,16 @@
         classFilter = stats.class || 'all';
         const classCard = document.getElementById('classFilterCard');
         if (classCard) {
-            classCard.classList.toggle('hidden', !(listingFilter === 'listed' && stats.class_counts));
+            const showClass = listingFilter === 'listed' && !!stats.class_counts;
+            // D1-D5 keep the top-level D button active.
+            const isD = /^D\d?$/.test(classFilter);
+            classCard.classList.toggle('hidden', !showClass);
+            document.getElementById('dClassFilterCard').classList.toggle('hidden', !(showClass && isD));
             document.querySelectorAll('#classFilter button').forEach(b =>
+                b.classList.toggle('active', b.dataset.class === (isD ? 'D' : classFilter)));
+            document.querySelectorAll('#dClassFilter button').forEach(b =>
                 b.classList.toggle('active', b.dataset.class === classFilter));
-            document.querySelectorAll('#classFilter [data-class-count]').forEach(el => {
+            document.querySelectorAll('#classFilter [data-class-count], #dClassFilter [data-class-count]').forEach(el => {
                 el.textContent = (stats.class_counts || {})[el.dataset.classCount] ?? 0;
             });
         }

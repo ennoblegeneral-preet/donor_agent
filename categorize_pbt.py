@@ -2,8 +2,10 @@
 One-time PBT categorisation of listed companies from company_universe.xlsx.
 
 For each Listed company: Screener se financials lo, calculate_csr_budget() wala
-3-year average PBT nikalo (current FY exclude, uske pehle ke 3 FY), aur category do:
-    A: avg PBT > 1000 Cr | B: 500-1000 | C: 100-500 | D: < 100 | NA: data nahi mila
+3-year average PBT nikalo (current FY exclude, uske pehle ke 3 FY), uska 2% CSR budget,
+aur us CSR budget se category do:
+    A: CSR budget > 1000 Cr | B: 500-1000 | C: 100-500 | D1-D5: 0-100 (pbt_category dekho)
+    Loss Making: budget < 0 | NA: data nahi mila
 
 Resumable: har company ka result company_pbt_cache.jsonl mein append hota hai,
 dobara chalane par already-done companies skip ho jaati hain.
@@ -15,6 +17,7 @@ Usage:
                                         # (NSE/BSE code lookup + standalone fallback)
     python categorize_pbt.py --partial-years  # NA wali (Screener page hai) pe available-years
                                               # rule: jitne recent saal ka PBT hai uska average
+    python categorize_pbt.py --reclass  # cached CSR budget se class dobara nikalo (koi fetch nahi)
 """
 import argparse
 import csv
@@ -41,16 +44,28 @@ OUTPUT_FILE = "company_pbt.xlsx"
 DELAY_SECONDS = 1.5
 
 
-def pbt_category(avg_pbt):
-    if avg_pbt is None:
+def pbt_category(csr_budget):
+    """Class CSR budget (avg PBT ka 2%, Cr) se. D ke 5 hisse: D1 25-100, D2 5-25,
+    D3 1-5, D4 0.1-1, D5 0-0.1; negative budget (avg PBT loss) = "Loss Making"."""
+    if csr_budget is None:
         return "NA"
-    if avg_pbt > 1000:
+    if csr_budget > 1000:
         return "A"
-    if avg_pbt >= 500:
+    if csr_budget >= 500:
         return "B"
-    if avg_pbt >= 100:
+    if csr_budget >= 100:
         return "C"
-    return "D"
+    if csr_budget < 0:
+        return "Loss Making"
+    if csr_budget >= 25:
+        return "D1"
+    if csr_budget >= 5:
+        return "D2"
+    if csr_budget >= 1:
+        return "D3"
+    if csr_budget >= 0.1:
+        return "D4"
+    return "D5"
 
 
 def load_listed_companies():
@@ -236,7 +251,7 @@ def partial_fields(pbt):
     if avg is None:
         return None
     return dict(calc_years=calc, average_pbt=avg, csr_budget_2pct=round(avg * 0.02, 2),
-                category=pbt_category(avg), pbt_basis="partial",
+                category=pbt_category(round(avg * 0.02, 2)), pbt_basis="partial",
                 note=f"Partial: {len(calc)} saal ka PBT average ({', '.join(calc)})")
 
 
@@ -262,7 +277,7 @@ def fetch_pbt_fields(url, fallback=True):
             fields = dict(screener_url=page_url, pbt=fin.get("pbt") or {},
                           calc_years=csr["calc_years"], average_pbt=csr["average_pbt"],
                           csr_budget_2pct=csr["csr_budget_2pct"],
-                          category=pbt_category(csr["average_pbt"]), note=csr["note"])
+                          category=pbt_category(csr["csr_budget_2pct"]), note=csr["note"])
         if csr["average_pbt"] is not None:
             return fields
         time.sleep(DELAY_SECONDS)
@@ -293,7 +308,21 @@ def write_output(records):
     for rec in records:
         counts[rec["category"]] = counts.get(rec["category"], 0) + 1
     print(f"[excel] wrote {len(records)} rows -> {OUTPUT_FILE} | "
-          + " ".join(f"{k}={counts.get(k, 0)}" for k in "ABCD") + f" NA={counts.get('NA', 0)}")
+          + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+
+
+def reclass(rec):
+    """Record ki class (aur verify ki class_before) uske csr_budget_2pct se dobara;
+    NA / Review waise hi rehte hain."""
+    budget = rec.get("csr_budget_2pct")
+    if budget is None:
+        return rec
+    new = dict(rec)
+    if rec["category"] not in ("NA", "Review"):
+        new["category"] = pbt_category(budget)
+    if rec.get("class_before") not in (None, "NA", "Review"):
+        new["class_before"] = pbt_category(budget)
+    return new
 
 
 def main():
@@ -301,11 +330,26 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--retry-na", action="store_true")
     parser.add_argument("--partial-years", action="store_true")
+    parser.add_argument("--reclass", action="store_true")
     args = parser.parse_args()
 
     companies = load_listed_companies()
     done = load_cache()
     codes = None
+    if args.reclass:
+        # Badli hui class wale records cache mein append; load_cache() last wala rakhta hai.
+        changed = 0
+        with open(CACHE_FILE, "a", encoding="utf-8") as cache:
+            for name, rec in list(done.items()):
+                new = reclass(rec)
+                if new != rec:
+                    done[name] = new
+                    cache.write(json.dumps(new, ensure_ascii=False) + "\n")
+                    changed += 1
+        print(f"[reclass] {changed} records updated")
+        names = {c["company_name"] for c in companies}
+        write_output([r for r in done.values() if r["company_name"] in names])
+        return
     if args.partial_years:
         # NA records jinka Screener page hai: dono pages dobara padho, available-years rule ke saath.
         todo = [r for c in companies

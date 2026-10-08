@@ -39,7 +39,7 @@ SAME_NAME_RATIO = 0.85
 
 
 def load_official_index():
-    """ISIN / issuer prefix (ISIN ke pehle 7 chars, sirf INE) / lowercase name
+    """ISIN / issuer prefix (ISIN ke pehle 7 chars, sirf INE) / _name_key(name)
     -> {"codes": set(NSE symbols + BSE codes), "names": set(official names)}."""
     by_isin, by_issuer, by_name = {}, {}, {}
 
@@ -54,8 +54,8 @@ def load_official_index():
             if row["isin"].startswith("INE"):
                 _add(by_issuer, row["isin"][:7], row)  # stock split ke baad ISIN badalta hai
         for n in row["names"]:
-            if n:
-                _add(by_name, n.lower(), row)
+            if _name_key(n):  # "LIMITED" vs "Ltd." jaisa farak ignore
+                _add(by_name, _name_key(n), row)
     print(f"[codes] {len(by_isin)} ISINs, {len(by_name)} names loaded")
     return by_isin, by_issuer, by_name
 
@@ -67,7 +67,7 @@ def official_for(rec, index):
         found = by_isin.get(isin) or (by_issuer.get(isin[:7]) if isin.startswith("INE") else None)
         if found:
             return found
-    return by_name.get(rec["company_name"].strip().lower())
+    return by_name.get(_name_key(rec["company_name"]))
 
 
 def read_screener_page(url):
@@ -107,6 +107,7 @@ def verify(rec, index):
     rec = dict(rec)
     official = official_for(rec, index)
     rec["official_codes"] = sorted(official["codes"]) if official else []
+    rec["category"] = rec.get("class_before", rec["category"])  # recheck par original class wapas
     rec["class_before"] = rec["category"]
 
     if not rec.get("screener_url"):
@@ -202,6 +203,8 @@ def main():
     parser.add_argument("--only", action="append", default=[],
                         help="sirf ye company naam (repeat kar sakte ho)")
     parser.add_argument("--dry-run", action="store_true", help="cache/report mein kuch save nahi")
+    parser.add_argument("--recheck", nargs="+", default=[], choices=["Review", "Unconfirmed"],
+                        help="in status wali companies dobara verify karo")
     args = parser.parse_args()
 
     names = {c["company_name"] for c in load_listed_companies()}
@@ -210,7 +213,8 @@ def main():
         wanted = {n.lower() for n in args.only}
         todo = [r for r in done.values() if r["company_name"].lower() in wanted]
     else:
-        todo = [r for r in done.values() if "verify_status" not in r]
+        todo = [r for r in done.values()
+                if "verify_status" not in r or r["verify_status"] in args.recheck]
     if args.limit:
         todo = todo[:args.limit]
     print(f"[start] {len(done)} companies, {len(todo)} to verify"
