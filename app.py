@@ -678,13 +678,20 @@ def _run_generation(slug):
             import extract_mca as emca
             records = []
             _set("running", "Fetching NSE listed companies…", 15)
-            records += ec.fetch_nse()
+            nse = ec.fetch_nse()
             _set("running", "Fetching BSE listed companies…", 35)
-            records += ec.fetch_bse()
+            bse = ec.fetch_bse()
             _set("running", "Scraping unlisted sources…", 55)
             records += ec.scrape_sharescart() + ec.scrape_unlistedzone() + ec.scrape_stockify()
             _set("running", "Fetching MCA Maharashtra registry…", 70)
-            records += emca.pipeline_records()
+            mca = emca.pipeline_records()
+            # A source that came back empty (site down / blocked) would shrink the
+            # saved universe, so keep the previous Excel + MongoDB copy instead.
+            failed = [n for n, rs in (("NSE", nse), ("BSE", bse), ("MCA", mca)) if not rs]
+            if failed:
+                raise RuntimeError(f"{', '.join(failed)} returned no companies (site "
+                                   "unreachable?) — previous data kept, try again later.")
+            records += nse + bse + mca
             _set("running", "Deduplicating…", 85)
             merged = ec.dedupe(records)
             _set("running", "Removing lowest paid-up unlisted companies…", 90)
