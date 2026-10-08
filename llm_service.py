@@ -94,6 +94,14 @@ def get_llm_config() -> dict:
             "Content-Type": "application/json"
         }
         endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    elif provider in ("anthropic", "claude"):
+        # Called through the Anthropic SDK in _call_anthropic(), not the
+        # OpenAI-style requests.post() below - endpoint/headers are unused.
+        provider = "anthropic"
+        api_key = (os.getenv("ANTHROPIC_API_KEY") or os.getenv("calude") or "").strip().strip('"').strip("'")
+        model = os.getenv("ANTHROPIC_MODEL", "claude-opus-5-5")
+        headers = {"x-api-key": api_key}
+        endpoint = None
     elif provider in ("nvidia", "nividia"):
         api_key = (os.getenv("NVIDIA_API_KEY") or os.getenv("NIVIDA_API_KEY") or os.getenv("nvidia_api_key") or os.getenv("nividia_api_key") or "").strip().strip('"').strip("'")
         model = os.getenv("NVIDIA_MODEL") or os.getenv("NIVIDA_MODEL") or "nvidia/nemotron-3-ultra-550b-a55b"
@@ -124,11 +132,25 @@ def call_llm(prompt: str, json_mode: bool = True, temperature: float = 0.0, time
     cfg = get_llm_config()
     timeout = int(os.getenv("LLM_TIMEOUT", timeout))
 
+    if cfg["provider"] == "anthropic":
+        content = _call_anthropic(cfg, prompt, json_mode, timeout)
+        return _parse_json_content(content) if json_mode else content
+
     payload = {
         "model": cfg["model"],
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
     }
+# def call_llm (prompt:str, json_mode: bool = True , temperature: float = 0.0, timeout: int = 600):
+#     """ send a prompt to the active llm provider(ollama / groq / openai).
+#     If json_mode is True,  return a parsed Python dictionary.
+
+#     LLM_TIMEout in .env
+
+
+
+
+
 
     if cfg["provider"] == "ollama":
         # Native /api/chat request/response shape differs from the OpenAI format -
@@ -167,17 +189,49 @@ def call_llm(prompt: str, json_mode: bool = True, temperature: float = 0.0, time
         _record_usage(res_json.get("usage") or {})
 
     if json_mode:
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            # Fallback substring extraction if output is wrapped in ```json ... ```
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start != -1 and end > start:
-                return json.loads(content[start:end])
-            raise
-    
+        return _parse_json_content(content)
+
     return content
+
+
+def _parse_json_content(content: str):
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        # Fallback substring extraction if output is wrapped in ```json ... ```
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start != -1 and end > start:
+            return json.loads(content[start:end])
+        raise
+
+
+def _call_anthropic(cfg: dict, prompt: str, json_mode: bool, timeout: int) -> str:
+    """Claude via the Anthropic SDK. No temperature (Claude Opus 5.5 rejects
+    sampling params) and no response_format - JSON comes from the prompt's own
+    "Return ONLY JSON" instruction plus a system reminder, parsed by
+    _parse_json_content(). ANTHROPIC_EFFORT (low/medium/high) trades depth for speed."""
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=cfg["headers"]["x-api-key"], timeout=timeout)
+    kwargs = {}
+    if json_mode:
+        kwargs["system"] = "Respond with a single valid JSON object only - no prose, no markdown fences."
+    response = client.messages.create(
+        model=cfg["model"],
+        max_tokens=16000,
+        output_config={"effort": os.getenv("ANTHROPIC_EFFORT", "medium")},
+        messages=[{"role": "user", "content": prompt}],
+        **kwargs,
+    )
+    if response.stop_reason == "refusal":
+        raise RuntimeError(f"Claude declined the request ({getattr(response.stop_details, 'category', None)})")
+    _record_usage({
+        "prompt_tokens": response.usage.input_tokens,
+        "completion_tokens": response.usage.output_tokens,
+        "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+    })
+    return "".join(b.text for b in response.content if b.type == "text").strip()
 
 def call_llm_safe(prompt: str, json_mode: bool = True, temperature: float = 0.0, timeout: int = 60) -> tuple:
     """
