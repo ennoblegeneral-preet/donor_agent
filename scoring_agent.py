@@ -61,6 +61,7 @@ STRICT GROUNDING RULES:
 - Base every rating and fitment strictly on the research data provided below. Do not guess.
 - If data for a factor is "Not Found" or missing, rate 0.0-0.2 and state so in the reason (e.g. "No spend data found").
 - Only rate above 0.5 if the data explicitly supports it.
+- A csr_* program flag of "Yes" IS explicit, human-verified education evidence - count it for education_focus even when company_csr_focus / previous_education_projects are empty.
 - Geography match rule: High (confirmed operating in at least 1 state/region, or pan-India) -> 0.8-1.0; Medium (a city/location is mentioned but the state/region of operation is unclear) -> 0.4-0.6; Low/empty -> 0.0-0.2.
 - Program Fitment: Mark High Fit, Medium Fit, Low Fit, or Not Evident for each program.
 
@@ -326,13 +327,49 @@ def assign_category(final_score: int):
     return "Tier C", f"Score {score}/100 is below {TIER_B_MIN}, so it's Tier C."
 
 
+def education_flag_evidence(company: dict) -> dict:
+    """{flag_field: evidence sentence} for every Ennoble program flag marked "Yes".
+    The evidence lives in company["education_fitment_evidence"], outside
+    research_json, so the scoring LLM otherwise only sees a bare "Yes"."""
+    research = company.get("research_json") or {}
+    evidence = company.get("education_fitment_evidence") or {}
+    found = {}
+    for flag_field in _PROGRAM_FLAG_FIELD.values():
+        if str(research.get(flag_field, "") or "").strip().lower() == "yes":
+            found[flag_field] = ((evidence.get(flag_field) or {}).get("evidence") or "").strip()
+    return found
+
+
+# Minimum education_focus rating by number of Ennoble program flags marked "Yes".
+_EDUCATION_FLOOR_BY_YES_COUNT = {1: 0.5, 2: 0.7}
+_EDUCATION_FLOOR_MAX = 0.85   # 3 or more "Yes" flags
+
+
 def score_company(company_id: str):
     company = get_company(company_id)
     research = company.get("research_json", {})
+    yes_flags = education_flag_evidence(company)
+    # The LLM sees only the Yes/No program flags in research_json - the evidence
+    # sentences stay in education_fitment_evidence for human review on screen.
     # One unified LLM call returns both factor ratings and program fitment.
     # Reusing both results avoids sending the same research JSON through a
     # second, duplicate fitment call.
     ratings, program_fit, scoring_error = rate_scoring_and_fitment(research)
+
+    # Education floor: each Ennoble program flag marked "Yes" is backed by found
+    # evidence, so education_focus can't sit below a minimum set by how many
+    # programs matched. Only raises the LLM's rating, never lowers it.
+    if yes_flags:
+        floor = _EDUCATION_FLOOR_BY_YES_COUNT.get(len(yes_flags), _EDUCATION_FLOOR_MAX)
+        current = (ratings.get("education_focus") or {}).get("rating", 0) or 0
+        if current < floor:
+            ratings = dict(ratings)
+            ratings["education_focus"] = {
+                "rating": floor,
+                "reason": f"{len(yes_flags)} Ennoble program(s) marked Yes ("
+                          + ", ".join(p for p, f in _PROGRAM_FLAG_FIELD.items() if f in yes_flags)
+                          + ") - rating raised to the evidence-based minimum.",
+            }
 
     # Hard financial prospect check (financial_extractor.check_prospect_criteria,
     # OR logic over turnover/net worth/net profit) overrides the LLM's qualitative

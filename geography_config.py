@@ -11,6 +11,7 @@ list is not proof the company has no relevant footprint elsewhere.
 
 PRIORITY_GEOGRAPHIES = [
     "Uttar Pradesh",
+    "Odisha",
     "Rajasthan",
     "Bihar",
     "Gujarat",

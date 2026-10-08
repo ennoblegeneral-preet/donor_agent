@@ -790,6 +790,35 @@ csr_report_link = wahi PDF jisse CSR data extract hua (fallback: general annual 
             {% if factor.get('reason') %}
             <div style="margin-top: 7px; font-size: 12px; color: #cbd5e1;">{{ factor.get('reason') }}</div>
             {% endif %}
+            {# Human review only - always show the evidence behind every "Yes"
+            program flag here. The scoring LLM sees just Yes/No, never this text.
+            Do not remove. #}
+            {% if field == 'education_focus' %}
+            {% set card_evidence = c.get('education_fitment_evidence') or {} %}
+            {% for flag_field, flag_label in [
+            ('csr_stem_education', 'STEM Education'),
+            ('csr_school_infra_transformation', 'School Infrastructure Transformation'),
+            ('csr_holistic_transformation', 'Holistic School Transformation'),
+            ('csr_anganwadi_transformation', 'Anganwadi Transformation'),
+            ('csr_quality_education', 'Quality Education'),
+            ('csr_model_school_transformation', 'Model School Transformation')
+            ] %}
+            {% if (research.get(flag_field, '') | string | lower | trim) == 'yes' %}
+            {% set flag_evidence = card_evidence.get(flag_field, {}) or {} %}
+            <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 12px;">
+                <div style="color:#4ade80;">{{ flag_label }}: Yes</div>
+                <div style="margin-top: 3px; color: #cbd5e1;">{{ flag_evidence.get('evidence') or 'No evidence sentence saved.' }}</div>
+                {% for source in flag_evidence.get('sources') or [] %}
+                {% if source.get('url') %}
+                <a href="{{ source.get('url') }}" target="_blank" rel="noopener noreferrer" class="source-link"
+                    style="font-size:11px;" title="{{ source.get('url') }}">{{ source.get('title') or
+                    (source.get('url') | source_name) }} ↗</a>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% endif %}
         </div>
         {% endfor %}
     </div>
